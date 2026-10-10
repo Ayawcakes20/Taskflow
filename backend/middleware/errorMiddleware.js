@@ -7,7 +7,7 @@ export class ApiError extends Error {
 }
 
 export function errorMiddleware(error, _req, res, _next) {
-  let status = error.statusCode || 500;
+  let status = error.statusCode || error.status || 500;
   let message = error.message || 'Something went wrong. Please try again.';
 
   if (error.name === 'ZodError') {
@@ -25,13 +25,14 @@ export function errorMiddleware(error, _req, res, _next) {
     message = Object.values(error.errors || {})[0]?.message || 'Please check the information and try again.';
   } else if (status >= 500) {
     message = 'Something went wrong. Please try again in a moment.';
-    console.error(error);
+    if (process.env.NODE_ENV === 'production') console.error('Taskflow request failed.', { status });
+    else console.error(error);
   }
 
   res.status(status).json({
     success: false,
     message,
-    ...(error.details ? { details: error.details } : {}),
+    ...(error.details && (status < 500 || process.env.NODE_ENV !== 'production') ? { details: error.details } : {}),
   });
 }
 

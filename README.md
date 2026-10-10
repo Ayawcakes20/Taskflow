@@ -19,7 +19,7 @@ The application contains no React Native/Expo/mobile-app code, no TypeScript/TSX
 
 - **Frontend:** React, Vite, JavaScript/JSX, React Router, Axios, Tailwind CSS, Motion React, Lucide React.
 - **Backend:** Node.js, Express, Mongoose/MongoDB, JWT, bcrypt, dotenv, cors, Helmet, Zod.
-- **Workspace:** pnpm 11.25.0; Node.js 20.19+ (Node 22 recommended).
+- **Workspace:** pnpm 11.25.0; Node.js 24.x.
 
 ## Architecture and folder structure
 
@@ -50,13 +50,13 @@ backend/
   .env.example
 ```
 
-Vite serves the browser app on port 3000 in development and proxies `/api` requests to Express on port 5000. Browser code uses a relative API URL, so Preview requests remain same-origin. In production Express serves the built frontend and API from the same listener; the host-provided `PORT` takes precedence.
+Vite serves the browser app on port 3000 in development and proxies `/api` requests to Express on port 5000. Browser code uses a relative API URL. Vercel uses separate frontend/backend projects and a same-origin frontend `/api` rewrite. Express exports its app for Functions and retains a listener for direct local execution. Combined non-Vercel hosting is opt-in with `SERVE_FRONTEND=true`. See [DEPLOYMENT.md](DEPLOYMENT.md) for exact configuration and API compatibility notes.
 
 MongoDB is the system of record. User and task references use Mongoose ObjectIds. New tasks store canonical `assignedUsers` references while retaining `assignedUser` for legacy documents/clients; reads and visibility checks handle both. Completion timestamps are cleared when a task is reopened. Dashboard completion trends are derived from tasks currently marked Completed, not an immutable event list. API query results are visibility-scoped; standard users see tasks they created or were assigned, while Admin can review the entire workspace. Authentication secrets and MongoDB credentials are never included in the frontend bundle.
 
 ## Requirements
 
-- Node.js 20.19 or later.
+- Node.js 24.x.
 - pnpm 11.25.0 (`corepack enable` then `corepack prepare pnpm@11.25.0 --activate`, if needed).
 - A reachable MongoDB Community Server or MongoDB Atlas database.
 
@@ -90,7 +90,7 @@ SESSION_COOKIE_SECURE=false
 CLIENT_ORIGIN=http://localhost:3000
 ```
 
-The supplied backend environment example defaults to `SameSite=None; Secure` for public HTTPS Preview. Do not turn off `Secure` on a public HTTPS deployment. Browser third-party-cookie policies may still affect sessions in an embedded iframe.
+The backend example uses `SameSite=Lax` and non-Secure cookies for local HTTP. The same-origin Vercel setup requires `SameSite=Lax; Secure` on HTTPS. Production startup rejects disabled Secure cookies and missing required configuration.
 
 ## MongoDB setup
 
@@ -121,9 +121,11 @@ A managed SQL database is not substituted for MongoDB. A public/hosted instance 
 | `JWT_SECRET` | JWT signing secret, at least 32 characters | Generate a unique random value |
 | `CLIENT_ORIGIN` | Allowed browser origins (comma-separated) | `http://localhost:3000` |
 | `SESSION_COOKIE_NAME` | Session cookie name | `taskflow_session` |
-| `SESSION_COOKIE_SAME_SITE` | Cookie SameSite behavior | `lax` locally; `none` for HTTPS Preview |
-| `SESSION_COOKIE_SECURE` | Secure-cookie flag | `false` locally; `true` for HTTPS Preview |
+| `SESSION_COOKIE_SAME_SITE` | Cookie SameSite behavior | `lax` with the same-origin proxy |
+| `SESSION_COOKIE_SECURE` | Secure-cookie flag | `false` locally; `true` for production HTTPS |
 | `VITE_API_URL` | Browser API base path | `/api` |
+| `BACKEND_API_ORIGIN` | Frontend Vercel configuration only | Exact backend HTTPS origin, without `/api` or a trailing slash |
+| `SERVE_FRONTEND` | Optional combined non-Vercel hosting | `true` to serve `frontend/dist`; off by default |
 
 For a local frontend served separately without the Vite proxy, set `VITE_API_URL=http://localhost:5000/api`. Keep `VITE_API_URL=/api` when using the Vite proxy or managed Preview; a `localhost` URL in a hosted browser points to the viewer's own device. The root, frontend, and backend `.env.example` files contain safe templates only. Files named `.env` are ignored by Git.
 
@@ -135,7 +137,7 @@ Start MongoDB first. Then run from the project root:
 pnpm dev
 ```
 
-Vite is available at `http://localhost:3000`; the Express API is available at `http://localhost:5000/api`. The API readiness endpoint is `http://localhost:5000/api/health`. The same health endpoint is available through Vite at `http://localhost:3000/api/health`.
+Vite is available at `http://localhost:3000`; the Express API is available at `http://localhost:5000/api`. The liveness endpoint is `http://localhost:5000/api/health`, also available through Vite. Its database field reports connection state, not a live ping. Database-dependent requests await connection readiness and return a recoverable 503 on failure.
 
 For separate terminals, use:
 
@@ -144,17 +146,17 @@ pnpm --dir frontend dev
 ```
 
 ```sh
-PORT=5000 pnpm --dir backend dev
+pnpm --dir backend dev
 ```
 
 Build and run the production server locally:
 
 ```sh
 pnpm build
-NODE_ENV=production PORT=5000 pnpm start
+NODE_ENV=production SERVE_FRONTEND=true PORT=5000 pnpm start
 ```
 
-The production server serves `frontend/dist` and the `/api` routes from the same Express listener. In a managed runtime, use its assigned `PORT` and provide a reachable MongoDB URI plus a strong `JWT_SECRET` through protected environment configuration.
+This optional combined production mode requires HTTPS through a reverse proxy, exact trusted HTTPS origins, and all required production variables. For local HTTP testing use development mode. The Vercel backend serves API routes only; see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## First Admin account
 

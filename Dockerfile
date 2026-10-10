@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 
 WORKDIR /app
 
@@ -14,5 +14,6 @@ COPY . .
 RUN pnpm build
 
 ENV NODE_ENV=production
+ENV SERVE_FRONTEND=true
 EXPOSE 3000
 CMD ["pnpm", "start"]

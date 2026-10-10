@@ -12,7 +12,7 @@ import { validateTaskImages } from '../utils/taskImages.js';
 import { normalizeSubtasks, statusAfterSubtaskChange, subtasksChanged } from '../utils/taskSubtasks.js';
 import { deadlineBoundary } from '../../frontend/src/utils/workspaceDates.js';
 
-function visibleTo(user) {
+export function visibleTo(user) {
   return user.role === 'Admin' ? {} : { $or: [
     { createdBy: user._id },
     { assignedUsers: user._id },

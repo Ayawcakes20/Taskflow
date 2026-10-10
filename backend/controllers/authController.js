@@ -15,7 +15,7 @@ function tokenFor(user) {
 }
 
 function cookieOptions() {
-  const sameSite = (process.env.SESSION_COOKIE_SAME_SITE || 'none').toLowerCase();
+  const sameSite = (process.env.SESSION_COOKIE_SAME_SITE || 'lax').toLowerCase();
   return {
     httpOnly: true,
     secure: process.env.SESSION_COOKIE_SECURE !== 'false',

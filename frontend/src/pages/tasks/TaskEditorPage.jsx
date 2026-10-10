@@ -11,6 +11,7 @@ import { taskService } from '../../services/taskService';
 import { getMessage } from '../../services/api';
 import { statusAfterSubtaskChange } from '../../utils/taskSubtasks';
 import { dispatchTaskChanged } from '../../utils/taskEvents';
+import { taskImagePayload } from '../../utils/imagePayload';
 
 const emptyForm = { title: '', description: '', priority: 'Medium', status: 'Pending', category: 'General', assignedUsers: [], dueDate: '', imageUrl: null, imageThumbnail: null, subtasks: [] };
 
@@ -72,15 +73,15 @@ export default function TaskEditorPage() {
     if (form.title.trim().length > 180) { setTitleError('Keep the title under 180 characters.'); return; }
     if (form.subtasks.some((subtask) => !subtask.title.trim())) { setError('Give each subtask a title or remove the empty row.'); return; }
     setSaving(true); setError('');
+    const { imageUrl: _imageUrl, imageThumbnail: _thumbnail, ...fields } = form;
     const payload = {
-      ...form,
+      ...fields,
       title: form.title.trim(),
       description: form.description.trim(),
       category: form.category.trim() || 'General',
       assignedUsers: form.assignedUsers,
       dueDate: form.dueDate || null,
-      imageUrl: form.imageUrl || null,
-      imageThumbnail: form.imageThumbnail || null,
+      ...taskImagePayload(form, editing),
     };
     try {
       const task = editing ? await taskService.update(id, payload) : await taskService.create(payload);

@@ -30,7 +30,7 @@ export async function notifyUser({ user, task = null, type, title, message, dedu
     }
     return await Notification.create({ user, task, type, title, message });
   } catch (error) {
-    if (error.code !== 11000) console.error(`Notification could not be saved: ${error.message}`);
+    if (error.code !== 11000) console.error(process.env.NODE_ENV === 'production' ? 'Notification could not be saved.' : `Notification could not be saved: ${error.message}`);
     return null;
   }
 }

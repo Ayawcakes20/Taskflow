@@ -6,6 +6,7 @@ import { useToast } from '../../context/ToastContext';
 import api, { getMessage } from '../../services/api';
 import { prepareTaskImage } from '../../utils/prepareTaskImage';
 import { formatDate } from '../../utils/format';
+import { profilePayload } from '../../utils/imagePayload';
 
 const emptyForm = { firstName: '', lastName: '', username: '', email: '', profileImage: '' };
 
@@ -78,7 +79,7 @@ export default function ProfilePage() {
     if (!form.firstName.trim() || !form.lastName.trim() || !form.username.trim() || !form.email.trim()) { setError('First name, last name, username, and email are required.'); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) { setError('Enter a valid email address.'); return; }
     setSaving(true);
-    try { const { data } = await api.put(`/users/${user._id}`, form); setUser(data.data.user); toast({ title: 'Profile updated successfully.' }); }
+    try { const { data } = await api.put(`/users/${user._id}`, profilePayload(form)); setUser(data.data.user); toast({ title: 'Profile updated successfully.' }); }
     catch (requestError) { setError(getMessage(requestError, 'Unable to update your profile.')); }
     finally { setSaving(false); }
   };

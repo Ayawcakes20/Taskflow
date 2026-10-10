@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import { addTaskComment, bulkTasks, createTask, deleteTask, deleteTaskComment, getTask, listTasks, updateTask, updateTaskComment } from '../controllers/taskController.js';
 import { protect } from '../middleware/authMiddleware.js';
+import { getTaskImage } from '../controllers/imageController.js';
 
 const router = Router();
 router.use(protect);
 router.post('/bulk', bulkTasks);
 router.get('/', listTasks);
 router.post('/', createTask);
+router.get('/:id/image', getTaskImage);
 router.post('/:id/comments', addTaskComment);
 router.put('/:id/comments/:commentId', updateTaskComment);
 router.delete('/:id/comments/:commentId', deleteTaskComment);

@@ -2,10 +2,12 @@ import { Router } from 'express';
 import { deleteUser, getUser, listAssignees, listUsers, updatePreferences, updateUser } from '../controllers/userController.js';
 import { protect } from '../middleware/authMiddleware.js';
 import { requireAdmin } from '../middleware/adminMiddleware.js';
+import { getUserImage } from '../controllers/imageController.js';
 
 const router = Router();
 router.use(protect);
 router.get('/assignees', listAssignees);
+router.get('/:id/image', getUserImage);
 router.get('/', requireAdmin, listUsers);
 router.get('/:id', getUser);
 router.put('/:id', updateUser);

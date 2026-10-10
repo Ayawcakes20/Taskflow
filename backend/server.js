@@ -17,17 +17,18 @@ import { getReports } from './controllers/reportController.js';
 import { protect } from './middleware/authMiddleware.js';
 import healthRoutes from './routes/healthRoutes.js';
 import { errorMiddleware, notFoundMiddleware } from './middleware/errorMiddleware.js';
+import { databaseReady } from './middleware/databaseReady.js';
+import { validateProductionConfig, trustedOrigins } from './config/production.js';
+import { trustedOrigin } from './middleware/trustedOrigin.js';
+import { imageResponses } from './middleware/imageResponses.js';
 
+validateProductionConfig();
 const app = express();
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(dirname, '..');
 const frontendDist = path.resolve(rootDir, 'frontend/dist');
 const port = Number(process.env.PORT) || 5000;
-const allowedOrigins = [...new Set([
-  ...(process.env.CLIENT_ORIGIN || '').split(',').map((value) => value.trim()).filter(Boolean),
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-])];
+const allowedOrigins = trustedOrigins();
 
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -35,7 +36,7 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
   frameguard: false,
   contentSecurityPolicy: { directives: {
-    frameAncestors: ["'self'", 'https://*.manus.computer', 'https://manus.im', 'https://*.manus.im'],
+    frameAncestors: ["'self'"],
     imgSrc: ["'self'", 'data:', 'https:'],
     styleSrc: ["'self'", 'https:', "'unsafe-inline'"],
     styleSrcAttr: ["'unsafe-inline'"],
@@ -44,21 +45,18 @@ app.use(helmet({
 app.use(cors({
   credentials: true,
   origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.manus.computer') || origin.endsWith('.manus.space')) return callback(null, true);
-    return callback(new Error('Origin not allowed.'));
+    return callback(null, !origin || allowedOrigins.has(origin));
   },
 }));
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
+app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+app.use('/api', trustedOrigin(allowedOrigins));
+app.use('/api', imageResponses);
 
 app.get('/api/health', (_req, res) => res.json({ success: true, service: 'taskflow-api', database: isDatabaseReady() ? 'connected' : 'unavailable' }));
+app.use('/api', databaseReady());
 app.use('/api/auth', createAuthRateLimits());
-
-app.use('/api', (req, res, next) => {
-  res.setHeader('Cache-Control', 'no-store');
-  if (req.path === '/health' || (req.path === '/auth/logout' && req.method === 'POST') || isDatabaseReady()) return next();
-  return res.status(503).json({ success: false, message: 'MongoDB is not available. Check the server connection and try again.' });
-});
 app.use('/api', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
@@ -68,7 +66,7 @@ app.use('/api/activity', activityRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.get('/api/reports', protect, getReports);
 
-if (process.env.NODE_ENV === 'production') {
+if (process.env.NODE_ENV === 'production' && process.env.SERVE_FRONTEND === 'true' && !process.env.VERCEL) {
   app.use(express.static(frontendDist, { index: false, maxAge: '1h' }));
   app.get(/^(?!\/api(?:\/|$)).*/, (_req, res, next) => {
     res.sendFile(path.join(frontendDist, 'index.html'), (error) => error && next(error));
@@ -78,13 +76,18 @@ if (process.env.NODE_ENV === 'production') {
 app.use(notFoundMiddleware);
 app.use(errorMiddleware);
 
-const server = app.listen(port, '0.0.0.0', () => {
-  console.info(`Taskflow API listening on port ${port}.`);
-  void connectDatabase();
-});
+export default app;
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    server.close(() => process.exit(0));
+// Vercel imports the app. Direct local execution keeps the existing start/dev commands.
+if (!process.env.VERCEL && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const server = app.listen(port, '0.0.0.0', () => {
+    console.info(`Taskflow API listening on port ${port}.`);
+    void connectDatabase();
   });
+
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+      server.close(() => process.exit(0));
+    });
+  }
 }
