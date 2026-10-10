@@ -8,6 +8,7 @@ import { ToastProvider } from './context/ToastContext';
 import AppShell from './components/layout/AppShell';
 
 const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
+const LandingPage = lazy(() => import('./pages/public/LandingPage'));
 const RegisterPage = lazy(() => import('./pages/auth/RegisterPage'));
 const DashboardPage = lazy(() => import('./pages/dashboard/DashboardPage'));
 const TasksPage = lazy(() => import('./pages/tasks/TasksPage'));
@@ -57,13 +58,13 @@ function AppRouter() {
 
   return <Suspense fallback={<div className="app-loader"><LoaderCircle className="spin" size={22} /><span>Loading page</span></div>}>
     <Routes>
+      <Route path="/" element={<LandingPage />} />
       <Route element={<Guest />}>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
       </Route>
       <Route element={<Protected />}>
         <Route element={<AppShell />}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Page><DashboardPage /></Page>} />
           <Route path="/tasks" element={<Page><TasksPage /></Page>} />
           <Route path="/kanban" element={<Page><KanbanPage /></Page>} />

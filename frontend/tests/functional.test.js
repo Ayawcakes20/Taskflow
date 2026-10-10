@@ -6,6 +6,7 @@ import { createServer } from 'vite';
 
 let server, dom, api, AuthProvider, ToastProvider, ThemeProvider, BrowserRouter, createRoot, root, container;
 let requestHandler;
+let authenticated = true;
 const user = { _id: '507f1f77bcf86cd799439011', firstName: 'Audit', lastName: 'Test', role: 'User', preferences: { theme: 'light', notifications: { assignments: true, updates: true, deadlines: true, mentions: true } } };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -26,6 +27,7 @@ before(async () => {
   ({ ThemeProvider } = await server.ssrLoadModule('/src/context/ThemeContext.jsx'));
   ({ BrowserRouter } = await import('react-router-dom'));
   api.defaults.adapter = async (config) => {
+    if (config.url === '/auth/me' && !authenticated) throw new Error('Unauthenticated test session');
     const response = config.url === '/auth/me' ? { user } : await requestHandler(config);
     return { config, status: 200, statusText: 'OK', headers: {}, data: { success: true, data: response } };
   };
@@ -35,6 +37,7 @@ afterEach(async () => {
   if (root) await act(async () => root.unmount());
   root = null;
   container?.remove();
+  authenticated = true;
 });
 after(async () => { await server?.close(); dom?.window.close(); });
 
@@ -60,6 +63,40 @@ async function fill(element, value) {
   });
   await act(async () => { await sleep(320); });
 }
+
+test('public home renders for guests and protected routes redirect to login', async () => {
+  authenticated = false;
+  window.history.replaceState({}, '', '/');
+  const App = (await server.ssrLoadModule('/src/App.jsx')).default;
+  container = document.createElement('div'); document.body.append(container);
+  root = createRoot(container);
+  await act(async () => { root.render(React.createElement(App)); await sleep(100); });
+  await act(async () => { await sleep(150); });
+  assert.match(container.textContent, /Big ideas/);
+  assert.ok(container.querySelector('a[href="/register"]'));
+  await act(async () => { window.history.pushState({}, '', '/tasks'); window.dispatchEvent(new window.PopStateEvent('popstate')); await sleep(100); });
+  await act(async () => { await sleep(100); });
+  assert.equal(window.location.pathname, '/login');
+  assert.ok(container.querySelector('input[autocomplete="current-password"]'));
+});
+
+test('signup validation catches usernames, byte limits and mismatched confirmation without API writes', async () => {
+  let writes = 0;
+  requestHandler = async () => { writes++; throw new Error('Unexpected API write'); };
+  await mount('/register', '/src/pages/auth/RegisterPage.jsx');
+  for (const [key, value] of Object.entries({ firstName: 'UI', lastName: 'Test', username: 'bad!', email: 'ui@example.com', password: 'password123', confirmPassword: 'password123' })) await fill(container.querySelector(`#${key}`), value);
+  await click(container.querySelector('button[type="submit"]'));
+  assert.match(container.querySelector('[role="alert"]').textContent, /username/);
+  await fill(container.querySelector('#username'), 'uitest');
+  await fill(container.querySelector('#password'), 'a1' + 'é'.repeat(36));
+  await click(container.querySelector('button[type="submit"]'));
+  assert.match(container.querySelector('[role="alert"]').textContent, /72 UTF-8 bytes/);
+  await fill(container.querySelector('#password'), 'password123');
+  await fill(container.querySelector('#confirmPassword'), 'different123');
+  await click(container.querySelector('button[type="submit"]'));
+  assert.match(container.querySelector('[role="alert"]').textContent, /do not match/);
+  assert.equal(writes, 0);
+});
 
 test('task search resets later pages when the query changes', async () => {
   const requests = [];
