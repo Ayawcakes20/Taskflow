@@ -39,7 +39,7 @@ function SidebarContent({ onNavigate }) {
       <div className="nav-section"><span className="nav-section-label">Workspace</span>{mainNav.map(navLink)}
       <NavLink to="/notifications" onClick={onNavigate} className={({ isActive }) => `side-link ${isActive ? 'active' : ''}`}><Bell size={18} strokeWidth={1.8} /><span>Notifications</span></NavLink></div>
       {user?.role === 'Admin' && <div className="nav-section"><span className="nav-section-label">Administration</span>
-        <NavLink to="/admin" onClick={onNavigate} className={({ isActive }) => `side-link ${isActive ? 'active' : ''}`}><Shield size={18} strokeWidth={1.8} /><span>Admin overview</span></NavLink>
+        <NavLink to="/admin" end onClick={onNavigate} className={({ isActive }) => `side-link ${isActive ? 'active' : ''}`}><Shield size={18} strokeWidth={1.8} /><span>Admin overview</span></NavLink>
         <NavLink to="/admin/users" onClick={onNavigate} className={({ isActive }) => `side-link ${isActive ? 'active' : ''}`}><Users size={18} strokeWidth={1.8} /><span>People</span></NavLink>
         <NavLink to="/admin/activity" onClick={onNavigate} className={({ isActive }) => `side-link ${isActive ? 'active' : ''}`}><Activity size={18} strokeWidth={1.8} /><span>Activity logs</span></NavLink>
       </div>}

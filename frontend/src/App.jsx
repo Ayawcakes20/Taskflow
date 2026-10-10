@@ -25,8 +25,9 @@ const AdminUsersPage = lazy(() => import('./pages/users/AdminUsersPage'));
 const AdminActivityPage = lazy(() => import('./pages/users/AdminActivityPage'));
 
 function Protected() {
-  const { user } = useAuth();
+  const { user, sessionError, refreshUser } = useAuth();
   const location = useLocation();
+  if (!user && sessionError) return <div className="app-loader" role="alert"><span>Unable to verify your session. Please try again.</span><button className="button button-primary" onClick={() => void refreshUser()}>Retry session check</button></div>;
   return user ? <Outlet /> : <Navigate to="/login" replace state={{ from: location.pathname }} />;
 }
 
@@ -54,7 +55,7 @@ function AppRouter() {
     if (saved) setTheme(saved);
   }, [user?._id, user?.preferences?.theme, setTheme]);
 
-  if (loading) return <div className="app-loader"><LoaderCircle className="spin" size={22} /><span>Loading your workspace</span></div>;
+  if (loading && !user) return <div className="app-loader"><LoaderCircle className="spin" size={22} /><span>Loading your workspace</span></div>;
 
   return <Suspense fallback={<div className="app-loader"><LoaderCircle className="spin" size={22} /><span>Loading page</span></div>}>
     <Routes>

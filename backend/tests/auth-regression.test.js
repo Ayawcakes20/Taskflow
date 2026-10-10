@@ -38,6 +38,8 @@ test('password changes rotate JWTs, reject old cookie/bearer sessions and preser
     return error;
   };
   assert.equal(await check(legacy), undefined);
+  assert.equal((await check('invalid-jwt')).statusCode, 401);
+  assert.equal((await check(jwt.sign({ sub: user.id }, 'wrong-test-secret'))).statusCode, 401);
   let fresh;
   const res = { cookie: (_name, token) => { fresh = token; }, json: () => {} };
   await changePassword({ user, body: { currentPassword: 'oldPassword1', newPassword: 'newPassword2' } }, res);

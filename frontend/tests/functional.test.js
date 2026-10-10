@@ -4,8 +4,8 @@ import { JSDOM } from 'jsdom';
 import React, { act } from 'react';
 import { createServer } from 'vite';
 
-let server, dom, api, AuthProvider, ToastProvider, ThemeProvider, BrowserRouter, createRoot, root, container;
-let requestHandler;
+let server, dom, api, AuthProvider, useAuth, ToastProvider, ThemeProvider, BrowserRouter, createRoot, root, container;
+let requestHandler, sessionHandler, authSnapshot;
 let authenticated = true;
 const user = { _id: '507f1f77bcf86cd799439011', firstName: 'Audit', lastName: 'Test', role: 'User', preferences: { theme: 'light', notifications: { assignments: true, updates: true, deadlines: true, mentions: true } } };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -22,13 +22,13 @@ before(async () => {
   ({ createRoot } = await import('react-dom/client'));
   server = await createServer({ server: { middlewareMode: true, watch: null }, appType: 'custom', logLevel: 'error' });
   api = (await server.ssrLoadModule('/src/services/api.js')).default;
-  ({ AuthProvider } = await server.ssrLoadModule('/src/context/AuthContext.jsx'));
+  ({ AuthProvider, useAuth } = await server.ssrLoadModule('/src/context/AuthContext.jsx'));
   ({ ToastProvider } = await server.ssrLoadModule('/src/context/ToastContext.jsx'));
   ({ ThemeProvider } = await server.ssrLoadModule('/src/context/ThemeContext.jsx'));
   ({ BrowserRouter } = await import('react-router-dom'));
   api.defaults.adapter = async (config) => {
-    if (config.url === '/auth/me' && !authenticated) throw new Error('Unauthenticated test session');
-    const response = config.url === '/auth/me' ? { user } : await requestHandler(config);
+    if (config.url === '/auth/me' && !authenticated) throw sessionFailure(401);
+    const response = config.url === '/auth/me' ? await (sessionHandler?.(config) ?? { user }) : await requestHandler(config);
     return { config, status: 200, statusText: 'OK', headers: {}, data: { success: true, data: response } };
   };
 });
@@ -38,12 +38,14 @@ afterEach(async () => {
   root = null;
   container?.remove();
   authenticated = true;
+  sessionHandler = undefined;
+  authSnapshot = undefined;
 });
 after(async () => { await server?.close(); dom?.window.close(); });
 
 async function mount(path, modulePath) {
   window.history.replaceState({}, '', path);
-  const Page = (await server.ssrLoadModule(modulePath)).default;
+  const Page = typeof modulePath === 'function' ? modulePath : (await server.ssrLoadModule(modulePath)).default;
   container = document.createElement('div'); document.body.append(container);
   root = createRoot(container);
   await act(async () => {
@@ -205,4 +207,115 @@ test('settings block overlapping writes, send a single preference and restore fa
   assert.equal(updates.checked, true);
   assert.equal(assignment.checked, false);
   assert.equal(updates.disabled, false);
+});
+
+function sessionFailure(status, headers = {}) {
+  return Object.assign(new Error('Simulated session verification failure'), status ? { response: { status, headers } } : {});
+}
+
+function AuthProbe() {
+  authSnapshot = useAuth();
+  return React.createElement('span', {}, authSnapshot.user ? 'Authenticated' : 'No verified session');
+}
+
+async function mountApp(path) {
+  window.history.replaceState({}, '', path);
+  const App = (await server.ssrLoadModule('/src/App.jsx')).default;
+  container = document.createElement('div'); document.body.append(container);
+  root = createRoot(container);
+  await act(async () => { root.render(React.createElement(App)); await sleep(50); });
+}
+
+test('HTTP 429 preserves an authenticated user and respects a long Retry-After without looping', async () => {
+  await mount('/tasks', AuthProbe);
+  let requests = 0;
+  sessionHandler = async () => { requests++; throw sessionFailure(429, { 'retry-after': '900' }); };
+  await act(async () => { await authSnapshot.refreshUser(); });
+  assert.equal(authSnapshot.user._id, user._id);
+  assert.equal(authSnapshot.sessionError, true);
+  assert.equal(authSnapshot.loading, false);
+  assert.equal(requests, 1);
+});
+
+for (const status of [undefined, 429, 503]) {
+  test(`${status || 'Network'} failures preserve valid authentication with at most three attempts`, async () => {
+    await mount('/tasks', AuthProbe);
+    let requests = 0;
+    sessionHandler = async () => { requests++; throw sessionFailure(status); };
+    await act(async () => { await authSnapshot.refreshUser(); });
+    assert.equal(authSnapshot.user._id, user._id);
+    assert.equal(authSnapshot.sessionError, true);
+    assert.equal(authSnapshot.loading, false);
+    assert.equal(requests, 3);
+    await act(async () => { await sleep(800); });
+    assert.equal(requests, 3);
+  });
+}
+
+test('HTTP 401 clears invalid sessions immediately without retries', async () => {
+  await mount('/tasks', AuthProbe);
+  let requests = 0;
+  sessionHandler = async () => { requests++; throw sessionFailure(401); };
+  await act(async () => { await authSnapshot.refreshUser(); });
+  assert.equal(authSnapshot.user, null);
+  assert.equal(authSnapshot.sessionError, false);
+  assert.equal(requests, 1);
+});
+
+test('startup session checks recover automatically after a brief HTTP 429', async () => {
+  let requests = 0;
+  sessionHandler = async () => {
+    requests++;
+    if (requests === 1) throw sessionFailure(429, { 'retry-after': '0' });
+    return { user };
+  };
+  await mount('/tasks', AuthProbe);
+  await act(async () => { await sleep(50); });
+  assert.equal(authSnapshot.user._id, user._id);
+  assert.equal(authSnapshot.sessionError, false);
+  assert.equal(requests, 2);
+});
+
+test('protected routes retain their URL during startup verification errors and recover on manual retry', async () => {
+  let requests = 0;
+  sessionHandler = async () => { requests++; throw sessionFailure(429, { 'retry-after': '900' }); };
+  requestHandler = async () => ({ items: [], unread: 0, categories: [], pagination: { page: 1, total: 0, totalPages: 1 } });
+  await mountApp('/tasks');
+  await act(async () => { await sleep(100); });
+  assert.equal(window.location.pathname, '/tasks');
+  assert.match(container.querySelector('[role="alert"]').textContent, /Unable to verify your session/);
+  assert.equal(requests, 1);
+  sessionHandler = async () => ({ user });
+  await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Retry session check'));
+  await act(async () => { await sleep(200); });
+  assert.equal(window.location.pathname, '/tasks');
+  assert.ok(container.querySelector('.app-frame'));
+  assert.equal(container.querySelector('[role="alert"]'), null);
+});
+
+test('logout cancels delayed verification so it cannot restore an old session', async () => {
+  await mount('/tasks', AuthProbe);
+  let resolveSession;
+  sessionHandler = () => new Promise((resolve) => { resolveSession = resolve; });
+  requestHandler = async () => ({});
+  let pending;
+  await act(async () => { pending = authSnapshot.refreshUser(); await sleep(10); });
+  await act(async () => { await authSnapshot.logout(); resolveSession({ user }); await pending; });
+  assert.equal(authSnapshot.user, null);
+  assert.equal(authSnapshot.loading, false);
+});
+
+test('admin navigation highlights only the matching overview, people or activity link', async () => {
+  sessionHandler = async () => ({ user: { ...user, role: 'Admin' } });
+  requestHandler = async () => ({ items: [], unread: 0 });
+  await mount('/admin', '/src/components/layout/AppShell.jsx');
+  for (const path of ['/admin', '/admin/users', '/admin/activity']) {
+    await act(async () => { window.history.pushState({}, '', path); window.dispatchEvent(new window.PopStateEvent('popstate')); await sleep(15); });
+    const links = [...container.querySelectorAll('.desktop-sidebar a[href^="/admin"]')];
+    assert.equal(links.length, 3);
+    for (const link of links) {
+      assert.equal(link.classList.contains('active'), link.getAttribute('href') === path, `${path}: ${link.getAttribute('href')}`);
+      assert.equal(link.getAttribute('aria-current'), link.getAttribute('href') === path ? 'page' : null);
+    }
+  }
 });
