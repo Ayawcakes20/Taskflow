@@ -1,0 +1,20 @@
+{
+  "name": "task-management-system",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail -n web,api -c cyan,green \"pnpm --dir frontend dev\" \"PORT=5000 pnpm --dir backend dev\"",
+    "build": "pnpm --dir frontend build",
+    "start": "pnpm --dir backend start",
+    "check": "pnpm --dir backend check && pnpm --dir frontend test && pnpm --dir frontend build",
+    "seed:admin": "pnpm --dir backend seed:admin"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

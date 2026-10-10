@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Taskflow mark">
+  <rect width="64" height="64" rx="19" fill="#19766b"/>
+  <path d="M17 20h24M17 32h30M27 44h20" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="5"/>
+  <circle cx="47" cy="20" r="2.5" fill="#a9dece"/>
+</svg>

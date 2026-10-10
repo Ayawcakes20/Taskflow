@@ -1,0 +1,8 @@
+packages:
+  - frontend
+  - backend
+
+allowBuilds:
+  "@tailwindcss/oxide": true
+  bcrypt: true
+  esbuild: true
