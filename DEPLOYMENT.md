@@ -96,7 +96,10 @@ Database-dependent requests await a cached in-progress connection. Warm
 connections are reused, with maxPoolSize=5, minPoolSize=0, maxIdleTimeMS=60000,
 and 3500ms connect/selection/queue timeouts. Failed attempts return controlled
 503 responses and can retry on the next request. No detached retry timers or
-per-request disconnects exist. `/api/health` is liveness, not a live DB ping.
+per-request disconnects exist. `/api/health` awaits the same cached connection
+attempt before reporting database status, including on a Vercel cold start.
+It remains a liveness endpoint (HTTP 200 even when the database is unavailable),
+not a live DB ping. A connected response indicates Mongoose connection state.
 Logout remains possible during a database outage.
 
 Production requires an explicit MongoDB URI and database name. Automatic

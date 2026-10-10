@@ -6,7 +6,7 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
 import { createAuthRateLimits } from './middleware/authRateLimits.js';
-import { connectDatabase, isDatabaseReady } from './config/db.js';
+import { connectDatabase } from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import taskRoutes from './routes/taskRoutes.js';
@@ -15,7 +15,7 @@ import activityRoutes from './routes/activityRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import { getReports } from './controllers/reportController.js';
 import { protect } from './middleware/authMiddleware.js';
-import healthRoutes from './routes/healthRoutes.js';
+import healthRoutes, { healthCheck } from './routes/healthRoutes.js';
 import { errorMiddleware, notFoundMiddleware } from './middleware/errorMiddleware.js';
 import { databaseReady } from './middleware/databaseReady.js';
 import { validateProductionConfig, trustedOrigins } from './config/production.js';
@@ -54,7 +54,7 @@ app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'
 app.use('/api', trustedOrigin(allowedOrigins));
 app.use('/api', imageResponses);
 
-app.get('/api/health', (_req, res) => res.json({ success: true, service: 'taskflow-api', database: isDatabaseReady() ? 'connected' : 'unavailable' }));
+app.get('/api/health', healthCheck);
 app.use('/api', databaseReady());
 app.use('/api/auth', createAuthRateLimits());
 app.use('/api', healthRoutes);
