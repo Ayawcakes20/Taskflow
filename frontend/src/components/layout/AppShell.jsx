@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { Activity, ArrowRight, BarChart3, Bell, CalendarDays, Check, ChevronsLeft, ClipboardList, KanbanSquare, LayoutDashboard, LogOut, Menu, Search, Settings, Shield, Users, X } from 'lucide-react';
+import { Activity, ArrowRight, BarChart3, Bell, CalendarDays, Check, ClipboardList, KanbanSquare, LayoutDashboard, LogOut, Menu, Search, Settings, Shield, Users, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { Avatar, IconButton } from '../common/Primitives';
-import api from '../../services/api';
+import { Avatar, IconButton, useDialogFocus } from '../common/Primitives';
+import api, { getMessage } from '../../services/api';
 import { formatDate } from '../../utils/format';
+import { navigateWithDraftGuard, signOutWithDraftGuard } from '../common/UnsavedChanges';
 
 const mainNav = [
   { to: '/dashboard', label: 'Overview', icon: LayoutDashboard },
@@ -48,10 +49,10 @@ function SidebarContent({ onNavigate }) {
       <NavLink to="/profile" onClick={onNavigate} className={({ isActive }) => `side-link settings-link ${isActive ? 'active' : ''}`}><Users size={18} strokeWidth={1.8} /><span>Profile</span></NavLink>
       <NavLink to="/settings" onClick={onNavigate} className={({ isActive }) => `side-link settings-link ${isActive ? 'active' : ''}`}><Settings size={18} strokeWidth={1.8} /><span>Settings</span></NavLink>
       <div className="sidebar-user">
-        <button className="user-chip" onClick={() => { onNavigate?.(); navigate('/profile'); }} aria-label="Open profile">
-          <Avatar user={user} size="sm" /><span className="user-chip-copy"><strong>{user?.firstName} {user?.lastName}</strong><small>{user?.role || 'User'}</small></span><ChevronsLeft size={14} className="user-chevron" />
-        </button>
-        <button className="logout-link" onClick={handleLogout}><LogOut size={16} /><span>Sign out</span></button>
+        <Link className="user-chip" to="/profile" onClick={onNavigate} aria-label="Open profile">
+          <Avatar user={user} size="sm" /><span className="user-chip-copy"><strong>{user?.firstName} {user?.lastName}</strong><small>{user?.role || 'User'}</small></span>
+        </Link>
+        <button className="logout-link" onClick={() => signOutWithDraftGuard(handleLogout)}><LogOut size={16} /><span>Sign out</span></button>
       </div>
     </div>
   </>;
@@ -62,7 +63,7 @@ function HeaderSearch() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   useEffect(() => setQuery(searchParams.get('q') || ''), [searchParams]);
-  return <form className="top-search" role="search" onSubmit={(event) => { event.preventDefault(); navigate(`/tasks${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''}`); }}>
+  return <form className="top-search" role="search" onSubmit={(event) => { event.preventDefault(); navigateWithDraftGuard(navigate, `/tasks${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''}`); }}>
     <Search size={16} aria-hidden="true" /><input aria-label="Search tasks" placeholder="Search tasks" value={query} onChange={(event) => setQuery(event.target.value)} />
   </form>;
 }
@@ -75,10 +76,14 @@ function NotificationButton() {
   const container = useRef(null);
   const navigate = useNavigate();
   const reduced = useReducedMotion();
-  const load = useCallback(() => api.get('/notifications', { params: { limit: 5 } }).then(({ data }) => {
-    setUnread(data.data.unread || 0);
-    setItems(data.data.items || []);
-  }).catch(() => {}), []);
+  const [fetching, setFetching] = useState(true);
+  const [error, setError] = useState('');
+  const load = useCallback(async () => {
+    setFetching(true); setError('');
+    try { const { data } = await api.get('/notifications', { params: { limit: 5 } }); setUnread(data.data.unread || 0); setItems(data.data.items || []); }
+    catch (problem) { setError(getMessage(problem, 'Unable to load notifications.')); }
+    finally { setFetching(false); }
+  }, []);
   useEffect(() => {
     let active = true;
     const refresh = async () => { if (!active) return; await load(); };
@@ -89,7 +94,7 @@ function NotificationButton() {
   useEffect(() => {
     if (!open) return undefined;
     const onPointer = (event) => { if (!container.current?.contains(event.target)) setOpen(false); };
-    const onKey = (event) => { if (event.key === 'Escape') setOpen(false); };
+    const onKey = (event) => { if (event.key === 'Escape') { setOpen(false); container.current?.querySelector('.header-bell')?.focus(); } };
     document.addEventListener('pointerdown', onPointer);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('pointerdown', onPointer); document.removeEventListener('keydown', onKey); };
@@ -111,8 +116,8 @@ function NotificationButton() {
   const openNotification = (notification) => {
     void markRead(notification);
     setOpen(false);
-    if (notification.task?._id) navigate(`/tasks/${notification.task._id}`);
-    else navigate('/notifications');
+    if (notification.task?._id) navigateWithDraftGuard(navigate, `/tasks/${notification.task._id}`);
+    else navigateWithDraftGuard(navigate, '/notifications');
   };
 
   return <div className="notification-menu-wrap" ref={container}>
@@ -121,8 +126,9 @@ function NotificationButton() {
     </IconButton>
     <AnimatePresence>
       {open && <motion.div id="notification-dropdown" className="notification-dropdown" role="dialog" aria-label="Recent notifications" initial={reduced ? { opacity: 0 } : { opacity: 0, y: 5, scale: .985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 4 }} transition={{ duration: reduced ? .1 : .16 }}>
-        <div className="notification-dropdown-head"><div><strong>Inbox</strong><small>{unread ? `${unread} unread` : 'All caught up'}</small></div><button className="text-button" disabled={!unread || loading} onClick={markAllRead}><Check size={13} />Mark all read</button></div>
-        <div className="notification-dropdown-list">{items.length ? items.map((notification) => <button className={`notification-dropdown-item ${notification.isRead ? 'is-read' : 'is-unread'}`} key={notification._id} onClick={() => openNotification(notification)}><span className={`notification-type-icon type-${notification.type}`}><Bell size={14} /></span><span className="notification-dropdown-copy"><strong>{notification.title}</strong><small>{notification.message}</small><time>{formatDate(notification.createdAt, { month: 'short', day: 'numeric' })}</time></span>{!notification.isRead && <span className="unread-indicator" />}</button>) : <div className="notification-dropdown-empty"><Bell size={17} /><span>No notifications yet</span></div>}</div>
+        <div className="notification-dropdown-head"><div><strong>Inbox</strong><small>{error ? 'Updates unavailable' : fetching ? 'Updating…' : unread ? `${unread} unread` : 'All caught up'}</small></div><button className="text-button" disabled={!unread || loading || fetching || Boolean(error)} onClick={markAllRead}><Check size={13} />Mark all read</button></div>
+        {error && <div className="inline-error" role="alert">{error}<button className="text-button" onClick={() => void load()}>Try again</button></div>}
+        <div className="notification-dropdown-list">{items.length ? items.map((notification) => <button className={`notification-dropdown-item ${notification.isRead ? 'is-read' : 'is-unread'}`} key={notification._id} onClick={() => openNotification(notification)}><span className={`notification-type-icon type-${notification.type}`}><Bell size={14} /></span><span className="notification-dropdown-copy"><strong>{notification.title}</strong><small>{notification.message}</small><time>{formatDate(notification.createdAt, { month: 'short', day: 'numeric' })}</time></span>{!notification.isRead && <span className="unread-indicator" />}</button>) : !error && <div className="notification-dropdown-empty" role="status"><Bell size={17} /><span>{fetching ? "Loading notifications…" : "No notifications yet"}</span></div>}</div>
         <Link className="notification-dropdown-footer" to="/notifications" onClick={() => setOpen(false)}>View all notifications <ArrowRight size={14} /></Link>
       </motion.div>}
     </AnimatePresence>
@@ -134,21 +140,29 @@ export default function AppShell() {
   const location = useLocation();
   const reduced = useReducedMotion();
   const { user } = useAuth();
+  const drawerRef = useRef(null);
+  useDialogFocus(drawerOpen, drawerRef, () => setDrawerOpen(false));
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [drawerOpen]);
   useEffect(() => setDrawerOpen(false), [location.pathname]);
   return <div className="app-frame">
     <aside className="desktop-sidebar"><SidebarContent /></aside>
     <AnimatePresence>
       {drawerOpen && <>
         <motion.button className="mobile-backdrop" aria-label="Close navigation" onClick={() => setDrawerOpen(false)} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
-        <motion.aside className="mobile-sidebar" initial={reduced ? { opacity: 0 } : { x: -260 }} animate={{ x: 0, opacity: 1 }} exit={reduced ? { opacity: 0 } : { x: -260 }} transition={{ duration: reduced ? 0.12 : 0.2 }}>
+        <motion.aside ref={drawerRef} id="mobile-navigation" role="dialog" aria-modal="true" aria-label="Navigation" tabIndex={-1} className="mobile-sidebar" initial={reduced ? { opacity: 0 } : { x: -260 }} animate={{ x: 0, opacity: 1 }} exit={reduced ? { opacity: 0 } : { x: -260 }} transition={{ duration: reduced ? 0.12 : 0.2 }}>
           <IconButton className="mobile-close" label="Close navigation" onClick={() => setDrawerOpen(false)}><X size={18} /></IconButton><SidebarContent onNavigate={() => setDrawerOpen(false)} />
         </motion.aside>
       </>}
     </AnimatePresence>
-    <div className="app-main">
+    <div className="app-main" inert={drawerOpen || undefined}>
       <header className="topbar">
-        <button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setDrawerOpen(true)}><Menu size={19} /></button>
-        <div className="topbar-context"><span className="context-dot" /><span>My workspace</span><ChevronsLeft size={14} className="context-caret" /></div>
+        <button className="mobile-menu icon-button" aria-label="Open navigation" aria-expanded={drawerOpen} aria-controls="mobile-navigation" onClick={() => setDrawerOpen(true)}><Menu size={19} /></button>
+        <div className="topbar-context"><span className="context-dot" /><span>My workspace</span></div>
         <HeaderSearch />
         <div className="topbar-actions"><NotificationButton /><span className="topbar-divider" /><Link className="header-profile" to="/profile" aria-label="Open profile"><Avatar user={user} size="sm" /></Link></div>
       </header>

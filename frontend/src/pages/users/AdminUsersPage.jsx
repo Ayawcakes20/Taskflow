@@ -21,15 +21,17 @@ export default function AdminUsersPage() {
   const { toast } = useToast();
   const reduced = useReducedMotion();
   const detailDialogRef = useRef(null);
+  const loadSequence = useRef(0);
   useDialogFocus(Boolean(selected), detailDialogRef, () => setSelected(null));
   useEffect(() => { const timer = setTimeout(() => { setSearch(q); setPage(1); }, 250); return () => clearTimeout(timer); }, [q]);
   const load = useCallback(async () => {
+    const sequence = ++loadSequence.current;
     setLoading(true); setError('');
-    try { const { data } = await api.get('/users', { params: { q: search, page, limit: 10, ...(activeFilter === 'all' ? {} : { isActive: activeFilter }), ...(roleFilter === 'all' ? {} : { role: roleFilter }) } }); setResult(data.data); }
-    catch (requestError) { setError(getMessage(requestError, 'Unable to load users.')); }
-    finally { setLoading(false); }
+    try { const { data } = await api.get('/users', { params: { q: search, page, limit: 10, ...(activeFilter === 'all' ? {} : { isActive: activeFilter }), ...(roleFilter === 'all' ? {} : { role: roleFilter }) } }); if (sequence === loadSequence.current) setResult(data.data); }
+    catch (requestError) { if (sequence === loadSequence.current) setError(getMessage(requestError, 'Unable to load users.')); }
+    finally { if (sequence === loadSequence.current) setLoading(false); }
   }, [search, page, activeFilter, roleFilter]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); return () => { loadSequence.current++; }; }, [load]);
   const action = async () => {
     if (!pending) return;
     setWorking(true);
@@ -46,13 +48,13 @@ export default function AdminUsersPage() {
     <section className="surface-card admin-table-panel">
       <div className="admin-table-toolbar"><label className="task-search"><Search size={16} /><input aria-label="Search users" placeholder="Search by name, username, or email" value={q} onChange={(event) => setQ(event.target.value)} /></label><select className="input admin-filter" aria-label="Filter users by account status" value={activeFilter} onChange={(event) => { setActiveFilter(event.target.value); setPage(1); }}><option value="all">All accounts</option><option value="true">Active</option><option value="false">Disabled</option></select><select className="input admin-filter" aria-label="Filter users by role" value={roleFilter} onChange={(event) => { setRoleFilter(event.target.value); setPage(1); }}><option value="all">All roles</option><option value="User">Users</option><option value="Admin">Admins</option></select><span className="admin-count">{result.pagination.total} people</span></div>
       {error && <div className="inline-error" role="alert">{error}<button className="text-button" onClick={() => void load()}>Try again</button></div>}
-      <div className="admin-user-table"><div className="admin-user-head"><span>Person</span><span>Role</span><span>Status</span><span>Joined</span><span>Actions</span></div>
-        {loading ? Array.from({ length: 5 }, (_, index) => <div className="admin-user-row" key={index}><Skeleton className="skeleton-title" /><Skeleton className="skeleton-status" /><Skeleton className="skeleton-status" /><Skeleton className="skeleton-date" /><Skeleton className="skeleton-status" /></div>) : result.items.length ? result.items.map((person) => <div className="admin-user-row" key={person._id}>
-          <button className="admin-person-cell" onClick={() => setSelected(person)}><Avatar user={person} size="sm" /><span><strong>{person.firstName} {person.lastName}</strong><small>@{person.username} · {person.email}</small></span></button>
-          <span className="role-badge"><Shield size={13} />{person.role}</span>
-          <span className={`account-status ${person.isActive ? 'account-active' : 'account-disabled'}`}><span className="status-dot" />{person.isActive ? 'Active' : 'Disabled'}</span>
-          <span className="admin-date">{formatDate(person.createdAt, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-          <div className="admin-user-actions"><button className="text-button" onClick={() => setPending({ type: 'toggle', user: person })}>{person.isActive ? 'Disable' : 'Enable'}</button><button className="text-button text-danger" onClick={() => setPending({ type: 'delete', user: person })}>Delete</button></div>
+      <p className="table-scroll-hint">Scroll horizontally to view every column.</p><div className="admin-user-table" role="table" aria-label="People" aria-busy={loading}><div className="admin-user-head" role="row"><span role="columnheader">Person</span><span role="columnheader">Role</span><span role="columnheader">Status</span><span role="columnheader">Joined</span><span role="columnheader">Actions</span></div>
+        {loading ? Array.from({ length: 5 }, (_, index) => <div className="admin-user-row" role="row" key={index}><Skeleton className="skeleton-title" /><Skeleton className="skeleton-status" /><Skeleton className="skeleton-status" /><Skeleton className="skeleton-date" /><Skeleton className="skeleton-status" /></div>) : error && !result.items.length ? null : result.items.length ? result.items.map((person) => <div className="admin-user-row" role="row" key={person._id}>
+          <div role="cell" className="admin-person-wrap"><button className="admin-person-cell" onClick={() => setSelected(person)}><Avatar user={person} size="sm" /><span><strong>{person.firstName} {person.lastName}</strong><small>@{person.username} · {person.email}</small></span></button></div>
+          <div role="cell" data-label="Role"><span className="role-badge"><Shield size={13} />{person.role}</span></div>
+          <div role="cell" data-label="Status"><span className={`account-status ${person.isActive ? 'account-active' : 'account-disabled'}`}><span className="status-dot" />{person.isActive ? 'Active' : 'Disabled'}</span></div>
+          <span role="cell" data-label="Joined" className="admin-date">{formatDate(person.createdAt, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+          <div role="cell" className="admin-user-actions"><button className="text-button" onClick={() => setPending({ type: 'toggle', user: person })}>{person.isActive ? 'Disable' : 'Enable'}</button><button className="text-button text-danger" onClick={() => setPending({ type: 'delete', user: person })}>Delete</button></div>
         </div>) : <EmptyState icon={UserRound} title="No users found" description="Try another search or account status filter." />}
       </div>
       <div className="table-footer"><span>{result.pagination.total} people in this workspace</span><div className="pagination-controls"><button className="pagination-button" aria-label="Previous page" disabled={page <= 1 || loading} onClick={() => setPage((current) => current - 1)}><ChevronLeft size={16} /></button><span className="page-count">Page <strong>{page}</strong> of <strong>{result.pagination.totalPages}</strong></span><button className="pagination-button" aria-label="Next page" disabled={page >= result.pagination.totalPages || loading} onClick={() => setPage((current) => current + 1)}><ChevronRight size={16} /></button></div></div>

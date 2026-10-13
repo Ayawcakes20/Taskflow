@@ -42,7 +42,8 @@ export default function TaskCommentsPanel({ task, onTaskChange }) {
 
   const updateComments = (next) => onTaskChange((current) => current ? { ...current, comments: next } : current);
   const canManage = (comment) => user?.role === 'Admin' || String(comment.user?._id ?? comment.user) === String(user?._id);
-  const matchingMembers = members.filter((person) => person.username?.toLowerCase().startsWith(mentionQuery || '')).slice(0, 6);
+  const participantIds = new Set([task.createdBy, task.assignedUser, ...(task.assignedUsers || [])].filter(Boolean).map((person) => String(person._id ?? person)));
+  const matchingMembers = members.filter((person) => (person.role === 'Admin' || participantIds.has(String(person._id))) && person.username?.toLowerCase().startsWith(mentionQuery || '')).slice(0, 6);
   const showSuggestions = mentionQuery !== null;
 
   const updateDraft = (event) => {
@@ -56,6 +57,7 @@ export default function TaskCommentsPanel({ task, onTaskChange }) {
     const next = draft.replace(/(^|\s)@([a-zA-Z0-9_.-]*)$/, `$1@${username} `);
     setDraft(next);
     setMentionQuery(null);
+    document.getElementById('field-new-task-comment')?.focus();
   };
 
   const add = async (event) => {
@@ -113,8 +115,8 @@ export default function TaskCommentsPanel({ task, onTaskChange }) {
     </article>)}</div> : <div className="quiet-empty task-comments-empty"><MessageSquare size={17} /><span>No comments yet. Share context with the people working on this task.</span></div>}
     <form className="task-comment-composer" onSubmit={add}><Avatar user={user} size="xs" /><div className="task-comment-compose-field">
       <TextAreaField label="Add a comment" name="new-task-comment" rows={3} maxLength={5000} value={draft} onChange={updateDraft} placeholder="Write a comment, use @username or @everyone…" disabled={posting} />
-      {showSuggestions && <div className="comment-mention-suggestions" role="listbox" aria-label="Mention suggestions">
-        <button type="button" className="comment-mention-option" onClick={() => insertMention('everyone')}><span className="mention-option-symbol">@</span><span><strong>@everyone</strong><small>Notify all active workspace users</small></span></button>
+      {showSuggestions && <div className="comment-mention-suggestions" role="group" aria-label="Mention suggestions">
+        <button type="button" className="comment-mention-option" onClick={() => insertMention('everyone')}><span className="mention-option-symbol">@</span><span><strong>@everyone</strong><small>Notify people with access to this task</small></span></button>
         {matchingMembers.map((person) => <button type="button" key={person._id} className="comment-mention-option" onClick={() => insertMention(person.username)}><Avatar user={person} size="xs" /><span><strong>@{person.username}</strong><small>{authorName(person)}</small></span></button>)}
       </div>}
       <div className="comment-compose-footer"><span>{draft.length}/5000</span><Button type="submit" icon={Send} loading={posting} disabled={!draft.trim()}>Post comment</Button></div>

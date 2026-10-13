@@ -14,11 +14,14 @@ export default function LoginPage() {
   const [form, setForm] = useState({ identifier: '', password: '' });
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const submit = async (event) => {
     event.preventDefault();
     setError('');
-    if (!form.identifier.trim() || !form.password) { setError('Enter your email or username and password.'); return; }
+    const invalid = { ...(!form.identifier.trim() && { identifier: 'Enter your email or username.' }), ...(!form.password && { password: 'Enter your password.' }) };
+    setFieldErrors(invalid);
+    if (Object.keys(invalid).length) { setError('Enter your email or username and password.'); document.getElementById(Object.keys(invalid)[0])?.focus(); return; }
     setLoading(true);
     try { await login(form); navigate(location.state?.from || '/dashboard', { replace: true }); }
     catch (requestError) { setError(getMessage(requestError, 'Invalid email or password.')); }
@@ -30,8 +33,8 @@ export default function LoginPage() {
       <Brand />
       <div className="auth-copy"><span className="eyebrow">YOUR WORKSPACE</span><h1>Good work starts<br />with a clear view.</h1><p>Sign in to pick up where your team left off.</p></div>
       <form className="auth-form" onSubmit={submit} aria-describedby={error ? 'auth-error' : undefined} noValidate>
-        <div className="field"><label htmlFor="identifier">Email or username</label><input id="identifier" className="input" autoComplete="username" autoFocus value={form.identifier} onChange={(event) => setForm({ ...form, identifier: event.target.value })} placeholder="you@example.com" /></div>
-        <div className="field"><div className="label-row"><label htmlFor="password">Password</label></div><div className="password-wrap"><input id="password" className="input" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Enter your password" /><button type="button" className="password-toggle" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></div>
+        <div className="field"><label htmlFor="identifier">Email or username</label><input id="identifier" className={`input ${fieldErrors.identifier ? 'input-error' : ''}`} aria-invalid={Boolean(fieldErrors.identifier)} aria-describedby={fieldErrors.identifier ? 'identifier-error' : undefined} autoComplete="username" autoFocus value={form.identifier} onChange={(event) => { setForm({ ...form, identifier: event.target.value }); setFieldErrors((current) => ({ ...current, identifier: '' })); setError(''); }} placeholder="you@example.com" />{fieldErrors.identifier && <span id="identifier-error" className="field-error">{fieldErrors.identifier}</span>}</div>
+        <div className="field"><div className="label-row"><label htmlFor="password">Password</label></div><div className="password-wrap"><input id="password" className={`input ${fieldErrors.password ? "input-error" : ""}`} aria-invalid={Boolean(fieldErrors.password)} aria-describedby={fieldErrors.password ? "password-error" : undefined} type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={form.password} onChange={(event) => { setForm({ ...form, password: event.target.value }); setFieldErrors((current) => ({ ...current, password: "" })); setError(''); }} placeholder="Enter your password" /><button type="button" className="password-toggle" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div>{fieldErrors.password && <span id="password-error" className="field-error">{fieldErrors.password}</span>}</div>
         {error && <div id="auth-error" className="form-alert" role="alert">{error}</div>}
         <button type="submit" className="button button-primary auth-submit" disabled={loading}>{loading ? <span className="spin-inline" /> : <>Sign in <ArrowRight size={16} /></>}</button>
       </form>

@@ -12,7 +12,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 before(async () => {
   dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost:3000/tasks', pretendToBeVisual: true });
-  for (const key of ['window', 'document', 'HTMLElement', 'Element', 'Node', 'localStorage', 'MutationObserver']) globalThis[key] = dom.window[key];
+  for (const key of ['window', 'document', 'HTMLElement', 'Element', 'Node', 'CustomEvent', 'localStorage', 'MutationObserver']) globalThis[key] = dom.window[key];
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
   globalThis.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
   globalThis.requestAnimationFrame = dom.window.requestAnimationFrame.bind(dom.window);
@@ -59,12 +59,274 @@ async function click(element) {
 }
 async function fill(element, value) {
   await act(async () => {
-    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(element, value);
+    const prototype = element instanceof window.HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, value);
     element.dispatchEvent(new window.Event('input', { bubbles: true }));
     element.dispatchEvent(new window.Event('change', { bubbles: true }));
   });
   await act(async () => { await sleep(320); });
 }
+
+async function mountRoute(path, modulePath, pattern) {
+  const Page = (await server.ssrLoadModule(modulePath)).default;
+  const { Routes, Route } = await import('react-router-dom');
+  await mount(path, () => React.createElement(Routes, {}, React.createElement(Route, { path: pattern, element: React.createElement(Page) })));
+}
+
+test('failed task edits block the empty form and recover through retry without writes', async () => {
+  let attempts = 0;
+  let writes = 0;
+  requestHandler = async (config) => {
+    if (config.method !== 'get') { writes++; throw new Error('Unexpected write'); }
+    if (config.url === '/users/assignees') return { items: [] };
+    if (++attempts === 1) throw new Error('Task could not be loaded');
+    return { task: { _id: 'fixture', title: 'Loaded task', status: 'Pending', priority: 'Medium' } };
+  };
+  await mountRoute('/tasks/fixture/edit', '/src/pages/tasks/TaskEditorPage.jsx', '/tasks/:id/edit');
+  assert.ok(container.querySelector('.load-error'));
+  assert.equal(container.querySelector('form'), null);
+  await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Try again'));
+  assert.equal(container.querySelector('#task-title').value, 'Loaded task');
+  assert.equal(writes, 0);
+});
+
+test('profile load failures block blank editing and retry restores the profile', async () => {
+  let attempts = 0;
+  requestHandler = async () => {
+    if (++attempts === 1) throw new Error('Profile could not be loaded');
+    return { user: { ...user, username: 'fixture', email: 'fixture@example.com' }, summary: {} };
+  };
+  const Profile = (await server.ssrLoadModule('/src/pages/profile/ProfilePage.jsx')).default;
+  await mount('/profile', () => useAuth().user ? React.createElement(Profile) : null);
+  assert.equal(container.querySelector('form'), null);
+  assert.equal(container.querySelectorAll('[role="alert"]').length, 1);
+  await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Try again'));
+  assert.equal(container.querySelector('#firstName').value, user.firstName);
+});
+
+test('loading buttons stay disabled even when the caller passes disabled false', async () => {
+  const { Button } = await server.ssrLoadModule('/src/components/common/Primitives.jsx');
+  await mount('/fixture', () => React.createElement(Button, { loading: true, disabled: false }, 'Save'));
+  assert.equal(container.querySelector('button').disabled, true);
+  assert.equal(container.querySelector('button').getAttribute('aria-busy'), 'true');
+});
+
+test('task cancellation asks before discarding edits and keep editing preserves the draft', async () => {
+  requestHandler = async () => ({ items: [] });
+  await mount('/tasks/create', '/src/pages/tasks/TaskEditorPage.jsx');
+  await fill(container.querySelector('#task-title'), 'Unsaved draft');
+  const reload = new window.Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(reload);
+  assert.equal(reload.defaultPrevented, true);
+  await click(container.querySelector('a[href="/tasks"]'));
+  assert.equal(window.location.pathname, '/tasks/create');
+  assert.match(container.querySelector('[role="alertdialog"]').textContent, /Leave without saving/);
+  await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Keep editing'));
+  assert.equal(container.querySelector('#task-title').value, 'Unsaved draft');
+});
+
+test('workspace search asks before leaving an unsaved task editor', async () => {
+  requestHandler = async () => ({ items: [], unread: 0 });
+  await mountApp('/tasks/create');
+  await act(async () => { await sleep(150); });
+  await fill(container.querySelector('#task-title'), 'Draft to preserve');
+  await act(async () => { container.querySelector('.top-search').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true })); await sleep(15); });
+  assert.equal(window.location.pathname, '/tasks/create');
+  assert.ok(container.querySelector('[role="alertdialog"]'));
+});
+
+test('sign out protects a draft and only calls logout after confirmation', async () => {
+  let logouts = 0;
+  requestHandler = async (config) => {
+    if (config.url === '/auth/logout') { logouts++; return {}; }
+    return { items: [], unread: 0 };
+  };
+  await mountApp('/tasks/create');
+  await act(async () => { await sleep(150); });
+  await fill(container.querySelector('#task-title'), 'Draft to preserve');
+  await click(container.querySelector('.logout-link'));
+  assert.equal(logouts, 0);
+  assert.equal(window.location.pathname, '/tasks/create');
+  await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Keep editing'));
+  assert.equal(container.querySelector('#task-title').value, 'Draft to preserve');
+  assert.equal(logouts, 0);
+  await click(container.querySelector('.logout-link'));
+  await click([...container.querySelector('[role="alertdialog"]').querySelectorAll('button')].find((button) => button.textContent === 'Sign out'));
+  await act(async () => { await sleep(150); });
+  assert.equal(logouts, 1);
+  assert.equal(window.location.pathname, '/login');
+});
+
+test('sign out without unsaved changes keeps the existing logout workflow', async () => {
+  let logouts = 0;
+  requestHandler = async (config) => {
+    if (config.url === '/auth/logout') { logouts++; return {}; }
+    return { items: [], unread: 0 };
+  };
+  await mountApp('/tasks/create');
+  await act(async () => { await sleep(150); });
+  await click(container.querySelector('.logout-link'));
+  await act(async () => { await sleep(150); });
+  assert.equal(logouts, 1);
+  assert.equal(container.querySelector('[role="alertdialog"]'), null);
+  assert.equal(window.location.pathname, '/login');
+});
+
+for (const [modulePath, path, searchLabel] of [
+  ['/src/pages/users/AdminUsersPage.jsx', '/admin/users', 'Search users'],
+  ['/src/pages/users/AdminActivityPage.jsx', '/admin/activity', 'Search activity'],
+]) {
+  test(`${searchLabel} keeps the latest results when an older response arrives last`, async () => {
+    let resolveOld;
+    const response = (name) => ({ items: [{ _id: name, firstName: name, lastName: 'Fixture', username: name, email: 'fixture@example.com', role: 'User', isActive: true, action: 'task.created', entityTitle: name, actor: user }], pagination: { total: 1, totalPages: 1 } });
+    requestHandler = (config) => config.params.q === 'older' ? new Promise((resolve) => { resolveOld = () => resolve(response('Outdated fixture')); }) : response(config.params.q === 'latest' ? 'Latest fixture' : 'Initial fixture');
+    await mount(path, modulePath);
+    await fill(container.querySelector(`input[aria-label="${searchLabel}"]`), 'older');
+    await fill(container.querySelector(`input[aria-label="${searchLabel}"]`), 'latest');
+    assert.match(container.textContent, /Latest fixture/);
+    await act(async () => { resolveOld(); await sleep(15); });
+    assert.match(container.textContent, /Latest fixture/);
+    assert.doesNotMatch(container.textContent, /Outdated fixture/);
+  });
+}
+
+test('calendar ignores a delayed response from a previously viewed month', async () => {
+  let resolveOld;
+  let requests = 0;
+  requestHandler = (config) => {
+    const response = (count) => ({ items: Array.from({ length: count }, (_, index) => ({ _id: String(index), title: `Fixture ${index}`, dueDate: config.params.dueFrom, status: 'Pending', priority: 'Medium' })), pagination: { totalPages: 1 } });
+    if (++requests === 1) return new Promise((resolve) => { resolveOld = () => resolve(response(1)); });
+    return response(2);
+  };
+  await mount('/calendar', '/src/pages/calendar/CalendarPage.jsx');
+  await click(container.querySelector('[aria-label="Next month"]'));
+  assert.match(container.querySelector('.calendar-month-chip').textContent, /2 dated tasks/);
+  await act(async () => { resolveOld(); await sleep(15); });
+  assert.match(container.querySelector('.calendar-month-chip').textContent, /2 dated tasks/);
+});
+
+test('registration errors identify invalid fields, focus the first error and keep guidance plain', async () => {
+  requestHandler = async () => { throw new Error('Unexpected write'); };
+  await mount('/register', '/src/pages/auth/RegisterPage.jsx');
+  await click(container.querySelector('button[type="submit"]'));
+  assert.equal(document.activeElement.id, 'firstName');
+  assert.equal(container.querySelectorAll('input[aria-invalid="true"]').length, 6);
+  for (const input of container.querySelectorAll('input[aria-invalid="true"]')) assert.ok(document.getElementById(input.getAttribute('aria-describedby')));
+  assert.doesNotMatch(container.textContent, /UTF-8 bytes/);
+});
+
+test('password settings reject oversized unicode before sending an API write', async () => {
+  let writes = 0;
+  requestHandler = async () => { writes++; return {}; };
+  await mount('/settings', '/src/pages/settings/SettingsPage.jsx');
+  await fill(container.querySelector('#currentPassword'), 'fixture123');
+  await fill(container.querySelector('#newPassword'), 'a1' + 'é'.repeat(36));
+  await fill(container.querySelector('#confirmPassword'), 'a1' + 'é'.repeat(36));
+  await click(container.querySelector('button[type="submit"]'));
+  assert.match(container.querySelector('[role="alert"]').textContent, /too long/);
+  assert.equal(writes, 0);
+});
+
+test('theme radios use a single tab stop and arrow keys select the next theme', async () => {
+  requestHandler = async (config) => ({ preferences: { ...user.preferences, ...config.data && JSON.parse(config.data) } });
+  await mount('/settings', '/src/pages/settings/SettingsPage.jsx');
+  const radios = container.querySelectorAll('[role="radio"]');
+  assert.equal([...radios].filter((radio) => radio.tabIndex === 0).length, 1);
+  await act(async () => { radios[0].focus(); radios[0].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); await sleep(20); });
+  assert.equal(radios[1].getAttribute('aria-checked'), 'true');
+  assert.equal(document.activeElement, radios[1]);
+});
+
+test('failed reports do not render fabricated zeros and retry restores real summaries', async () => {
+  let attempts = 0;
+  requestHandler = async () => {
+    if (++attempts === 1) throw new Error('Reports unavailable');
+    return { summary: { total: 4, completed: 2, completionRate: 50 }, trend: [] };
+  };
+  await mount('/reports', '/src/pages/reports/ReportsPage.jsx');
+  assert.equal(container.querySelector('.report-summary-grid'), null);
+  await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Try again'));
+  assert.match(container.querySelector('.report-summary-grid').textContent, /50%/);
+});
+
+test('report zero counts draw zero-height bars and day counts are keyboard-readable', async () => {
+  requestHandler = async () => ({ summary: { total: 2 }, trend: [{ date: '2026-10-13', count: 0 }, { date: '2026-10-14', count: 2 }] });
+  await mount('/reports', '/src/pages/reports/ReportsPage.jsx');
+  const columns = container.querySelectorAll('.report-trend-column');
+  assert.equal(columns[0].querySelector('.report-trend-bar').style.height, '0%');
+  assert.equal(columns[1].querySelector('.report-trend-bar').style.height, '100%');
+  assert.equal(columns[0].tabIndex, 0);
+  assert.match(columns[0].getAttribute('aria-label'), /0 completed tasks/);
+});
+
+test('notification filters expose selection and the read empty state describes its filter', async () => {
+  requestHandler = async (config) => ({ items: [], unread: 3, pagination: { total: config.params.read ? 0 : 3, totalPages: 1 } });
+  await mount('/notifications', '/src/pages/notifications/NotificationsPage.jsx');
+  await click([...container.querySelectorAll('.notification-tab')].find((button) => button.textContent === 'Read'));
+  assert.match(container.textContent, /No read notifications/);
+  assert.equal(container.querySelector('.notification-tab').querySelector('span'), null);
+  assert.equal(container.querySelector('.notification-tab.active').getAttribute('aria-pressed'), 'true');
+});
+
+test('mobile navigation exposes a dialog and Escape closes it', async () => {
+  requestHandler = async () => ({ items: [], unread: 0 });
+  await mount('/tasks', '/src/components/layout/AppShell.jsx');
+  const opener = container.querySelector('[aria-label="Open navigation"]');
+  await click(opener);
+  assert.equal(opener.getAttribute('aria-expanded'), 'true');
+  assert.equal(container.querySelector('#mobile-navigation').getAttribute('aria-modal'), 'true');
+  assert.ok(container.querySelector('.app-main').hasAttribute('inert'));
+  await act(async () => { document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await sleep(200); });
+  assert.equal(opener.getAttribute('aria-expanded'), 'false');
+  assert.equal(container.querySelector('.app-main').hasAttribute('inert'), false);
+});
+
+test('notification dropdown reports loading failures instead of an empty inbox', async () => {
+  requestHandler = async () => { throw new Error('Inbox unavailable'); };
+  await mount('/tasks', '/src/components/layout/AppShell.jsx');
+  await click(container.querySelector('.header-bell'));
+  assert.match(container.querySelector('.notification-dropdown').textContent, /Unable to reach Taskflow/);
+  assert.doesNotMatch(container.querySelector('.notification-dropdown').textContent, /No notifications yet|All caught up/);
+});
+
+test('unknown routes show a useful not-found page without changing the address', async () => {
+  requestHandler = async () => ({});
+  await mountApp('/missing-fixture');
+  await act(async () => { await sleep(100); });
+  assert.match(container.textContent, /Page not found/);
+  assert.equal(window.location.pathname, '/missing-fixture');
+});
+
+test('task table exposes column relationships, current-page selection and explicit deletion', async () => {
+  requestHandler = async () => ({ items: [] });
+  const Table = (await server.ssrLoadModule('/src/components/tasks/TaskTable.jsx')).default;
+  await mount('/tasks', () => React.createElement(Table, { tasks: [{ _id: 'fixture', title: 'Accessible task', status: 'Pending', priority: 'High' }], onToggle() {}, onDelete() {} }));
+  assert.equal(container.querySelector('[role="table"]').getAttribute('aria-label'), 'Tasks');
+  assert.equal(container.querySelectorAll('[role="columnheader"]').length, 7);
+  assert.equal(container.querySelectorAll('.task-row [role="cell"]').length, 7);
+  assert.ok(container.querySelector('[aria-label="Select all tasks on this page"]'));
+  assert.ok(container.querySelector('[aria-label="Delete Accessible task"]'));
+});
+
+test('mention suggestions match task visibility and restore focus to the composer', async () => {
+  const people = [
+    { ...user, username: 'participant' },
+    { ...user, _id: 'other', role: 'Admin', username: 'administrator' },
+    { ...user, _id: 'unrelated', username: 'outsider' },
+  ];
+  requestHandler = async () => ({ items: people });
+  const Comments = (await server.ssrLoadModule('/src/components/tasks/TaskCommentsPanel.jsx')).default;
+  await mount('/tasks/fixture', () => React.createElement(Comments, { task: { _id: 'fixture', createdBy: user, comments: [] }, onTaskChange() {} }));
+  await fill(container.querySelector('textarea'), '@');
+  const suggestions = container.querySelector('[aria-label="Mention suggestions"]');
+  assert.equal(suggestions.getAttribute('role'), 'group');
+  assert.match(suggestions.textContent, /people with access/);
+  assert.match(suggestions.textContent, /participant|administrator/);
+  assert.doesNotMatch(suggestions.textContent, /outsider/);
+  await click(suggestions.querySelector('button'));
+  assert.equal(container.querySelector('textarea').value, '@everyone ');
+  assert.equal(document.activeElement, container.querySelector('textarea'));
+});
 
 test('public home renders for guests and protected routes redirect to login', async () => {
   authenticated = false;
@@ -92,7 +354,8 @@ test('signup validation catches usernames, byte limits and mismatched confirmati
   await fill(container.querySelector('#username'), 'uitest');
   await fill(container.querySelector('#password'), 'a1' + 'é'.repeat(36));
   await click(container.querySelector('button[type="submit"]'));
-  assert.match(container.querySelector('[role="alert"]').textContent, /72 UTF-8 bytes/);
+  assert.match(container.querySelector('[role="alert"]').textContent, /too long/);
+  assert.doesNotMatch(container.textContent, /UTF-8 bytes/);
   await fill(container.querySelector('#password'), 'password123');
   await fill(container.querySelector('#confirmPassword'), 'different123');
   await click(container.querySelector('button[type="submit"]'));

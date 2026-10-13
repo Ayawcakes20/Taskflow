@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, LockKeyhole, Moon, Sun, Monitor, ShieldCheck } from 'lucide-react';
+import { Bell, Eye, EyeOff, LockKeyhole, Moon, Sun, Monitor, ShieldCheck } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Button, PageHeader } from '../../components/common/Primitives';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 import api, { getMessage } from '../../services/api';
+import { newPasswordError } from '../../utils/passwordValidation';
 
 const themes = [
   { value: 'light', label: 'Light', detail: 'Bright surfaces for daytime work.', icon: Sun },
@@ -21,6 +23,7 @@ export default function SettingsPage() {
   const [password, setPassword] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [passwordError, setPasswordError] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
+  const [visiblePasswords, setVisiblePasswords] = useState({});
   const [savingPreference, setSavingPreference] = useState(false);
   const preferenceBusy = useRef(false);
   useEffect(() => setNotifications({ assignments: true, updates: true, deadlines: true, mentions: true, ...(preferences.notifications || {}) }), [preferences.notifications]);
@@ -56,7 +59,7 @@ export default function SettingsPage() {
   };
   const changePassword = async (event) => {
     event.preventDefault(); setPasswordError('');
-    if (password.newPassword.length < 8 || !/[A-Za-z]/.test(password.newPassword) || !/[0-9]/.test(password.newPassword)) { setPasswordError('Use at least 8 characters with a letter and a number.'); return; }
+    if (newPasswordError(password.newPassword)) { setPasswordError(newPasswordError(password.newPassword)); document.getElementById('newPassword')?.focus(); return; }
     if (password.newPassword !== password.confirmPassword) { setPasswordError('Passwords do not match.'); return; }
     setSavingPassword(true);
     try { await api.put('/auth/password', { currentPassword: password.currentPassword, newPassword: password.newPassword }); setPassword({ currentPassword: '', newPassword: '', confirmPassword: '' }); toast({ title: 'Password updated successfully.' }); }
@@ -64,11 +67,19 @@ export default function SettingsPage() {
     finally { setSavingPassword(false); }
   };
 
+  const themeKeyDown = (event, index) => {
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? themes.length - 1
+      : ['ArrowRight', 'ArrowDown'].includes(event.key) ? (index + 1) % themes.length
+      : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? (index + themes.length - 1) % themes.length : null;
+    if (next === null || preferenceBusy.current) return;
+    event.preventDefault(); event.currentTarget.parentElement.querySelectorAll('[role="radio"]')[next]?.focus(); void chooseTheme(themes[next].value);
+  };
+
   return <>
     <PageHeader eyebrow="PREFERENCES" title="Settings" description="Make Taskflow feel right for the way you work." />
     <div className="settings-layout">
       <section className="surface-card settings-panel"><div className="settings-section-heading"><span className="settings-section-icon"><Sun size={17} /></span><div><h2>Appearance</h2><p>Choose the surface that feels comfortable for you.</p></div></div>
-        <div className="theme-options" role="radiogroup" aria-label="Theme preference">{themes.map((item) => { const Icon = item.icon; return <button key={item.value} type="button" role="radio" disabled={savingPreference} aria-checked={theme === item.value} className={`theme-option ${theme === item.value ? 'selected' : ''}`} onClick={() => void chooseTheme(item.value)}><span className="theme-preview"><Icon size={18} /></span><span className="theme-copy"><strong>{item.label}</strong><small>{item.detail}</small></span><span className="radio-indicator" /></button>; })}</div>
+        <div className="theme-options" role="radiogroup" aria-label="Theme preference">{themes.map((item, index) => { const Icon = item.icon; return <button key={item.value} type="button" role="radio" tabIndex={theme === item.value ? 0 : -1} onKeyDown={(event) => themeKeyDown(event, index)} disabled={savingPreference} aria-checked={theme === item.value} className={`theme-option ${theme === item.value ? 'selected' : ''}`} onClick={() => void chooseTheme(item.value)}><span className="theme-preview"><Icon size={18} /></span><span className="theme-copy"><strong>{item.label}</strong><small>{item.detail}</small></span><span className="radio-indicator" /></button>; })}</div>
         {savingPreference && <span className="save-hint">Saving preference…</span>}
       </section>
       <section className="surface-card settings-panel"><div className="settings-section-heading"><span className="settings-section-icon"><Bell size={17} /></span><div><h2>Notifications</h2><p>Choose which workspace updates reach your inbox.</p></div></div>
@@ -80,9 +91,17 @@ export default function SettingsPage() {
         ].map(([key, label, detail]) => <label className="preference-row" key={key}><span><strong>{label}</strong><small>{detail}</small></span><input className="toggle-input" type="checkbox" disabled={savingPreference} checked={Boolean(notifications[key])} onChange={() => void toggleNotification(key)} aria-label={label} /></label>)}</div>
       </section>
       <section className="surface-card settings-panel"><div className="settings-section-heading"><span className="settings-section-icon"><LockKeyhole size={17} /></span><div><h2>Change password</h2><p>Use a strong password you do not use elsewhere.</p></div></div>
-        <form className="password-settings-form" onSubmit={changePassword}><div className="field"><label htmlFor="currentPassword">Current password</label><input id="currentPassword" className="input" type="password" autoComplete="current-password" value={password.currentPassword} onChange={(event) => setPassword({ ...password, currentPassword: event.target.value })} required /></div><div className="form-grid-two"><div className="field"><label htmlFor="newPassword">New password</label><input id="newPassword" className="input" type="password" autoComplete="new-password" value={password.newPassword} onChange={(event) => setPassword({ ...password, newPassword: event.target.value })} required /></div><div className="field"><label htmlFor="confirmPassword">Confirm new password</label><input id="confirmPassword" className="input" type="password" autoComplete="new-password" value={password.confirmPassword} onChange={(event) => setPassword({ ...password, confirmPassword: event.target.value })} required /></div></div>{passwordError && <div className="form-alert" role="alert">{passwordError}</div>}<Button type="submit" variant="secondary" icon={ShieldCheck} loading={savingPassword}>Update password</Button></form>
+        <form className="password-settings-form" onSubmit={changePassword}>
+          {['currentPassword', 'newPassword', 'confirmPassword'].map((key) => <div className="field" key={key}>
+            <label htmlFor={key}>{key === 'currentPassword' ? 'Current password' : key === 'newPassword' ? 'New password' : 'Confirm new password'}</label>
+            <div className="password-wrap"><input id={key} className="input" type={visiblePasswords[key] ? 'text' : 'password'} autoComplete={key === 'currentPassword' ? 'current-password' : 'new-password'} value={password[key]} onChange={(event) => setPassword({ ...password, [key]: event.target.value })} required disabled={savingPassword} aria-describedby={key === 'newPassword' ? 'new-password-hint' : undefined} /><button type="button" className="password-toggle" aria-label={(visiblePasswords[key] ? 'Hide ' : 'Show ') + (key === 'currentPassword' ? 'current password' : key === 'newPassword' ? 'new password' : 'password confirmation')} onClick={() => setVisiblePasswords((current) => ({ ...current, [key]: !current[key] }))}>{visiblePasswords[key] ? <EyeOff size={16} /> : <Eye size={16} />}</button></div>
+            {key === 'newPassword' && <span id="new-password-hint" className="field-hint">At least 8 characters with a letter and a number.</span>}
+          </div>)}
+          {passwordError && <div className="form-alert" role="alert">{passwordError}</div>}
+          <Button type="submit" variant="secondary" icon={ShieldCheck} loading={savingPassword}>Update password</Button>
+        </form>
       </section>
-      <section className="settings-account-note"><span className="settings-section-icon"><ShieldCheck size={17} /></span><div><strong>Account settings</strong><p>Profile details are managed from your <a href="/profile">profile page</a>. For account access changes, contact an administrator.</p></div></section>
+      <section className="settings-account-note"><span className="settings-section-icon"><ShieldCheck size={17} /></span><div><strong>Account settings</strong><p>Profile details are managed from your <Link to="/profile">profile page</Link>. For account access changes, contact an administrator.</p></div></section>
     </div>
   </>;
 }

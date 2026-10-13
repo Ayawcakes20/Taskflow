@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { AlertTriangle, Check, LoaderCircle, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 export function useDialogFocus(open, dialogRef, onClose, allowEscape = true) {
   const closeRef = useRef(onClose);
@@ -35,7 +36,7 @@ export function useDialogFocus(open, dialogRef, onClose, allowEscape = true) {
 }
 
 export function Button({ children, variant = 'primary', size = 'md', icon: Icon, loading = false, className = '', type = 'button', ...props }) {
-  return <button type={type} className={`button button-${variant} button-${size} ${className}`} disabled={props.disabled || loading} {...props}>
+  return <button type={type} className={`button button-${variant} button-${size} ${className}`} {...props} disabled={props.disabled || loading} aria-busy={loading || undefined}>
     {loading ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : Icon ? <Icon size={16} aria-hidden="true" /> : null}
     <span>{children}</span>
   </button>;
@@ -83,6 +84,10 @@ export function EmptyState({ icon: Icon, title, description, action }) {
     {description && <p>{description}</p>}
     {action}
   </div>;
+}
+
+export function LoadError({ message, onRetry, backTo, backLabel = 'Back' }) {
+  return <section className="surface-card load-error" role="alert"><AlertTriangle size={24} aria-hidden="true" /><h2>Unable to load this page</h2><p>{message}</p><div className="page-actions"><Button onClick={onRetry}>Try again</Button>{backTo && <Link className="button button-secondary" to={backTo}>{backLabel}</Link>}</div></section>;
 }
 
 export function Field({ label, error, hint, className = '', id, ...props }) {

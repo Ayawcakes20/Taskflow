@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, useReducedMotion } from 'motion/react';
 import { ArrowRight, ArrowUpRight, CalendarClock, CheckCircle2, CircleDashed, Clock3, Plus, TrendingUp } from 'lucide-react';
-import { Avatar, Button, EmptyState, PageHeader, PriorityBadge, Skeleton } from '../../components/common/Primitives';
+import { Avatar, Button, EmptyState, LoadError, PageHeader, PriorityBadge, Skeleton } from '../../components/common/Primitives';
 import SpringCheck from '../../components/tasks/SpringCheck';
 import { getDashboard } from '../../services/workspaceService';
 import { taskService } from '../../services/taskService';
@@ -88,6 +88,7 @@ export default function DashboardPage() {
   };
 
   const today = new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric', timeZone: WORKSPACE_TIME_ZONE }).format(new Date()).toUpperCase();
+  if (error && !dashboard) return <LoadError message={error} onRetry={() => void load()} />;
   return <>
     <PageHeader eyebrow={today} title="Your work, at a glance." description="A clear view of what’s moving and what needs you next." actions={<Link to="/tasks/create" className="button button-primary"><Plus size={16} />Create task</Link>} />
     {error && <div className="inline-error" role="alert"><span>{error}</span><button className="text-button" onClick={() => void load()}>Try again</button></div>}
@@ -99,10 +100,10 @@ export default function DashboardPage() {
     <div className="dashboard-grid">
       <section className="surface-card dashboard-analytics"><div className="section-header"><div><span className="section-label">WORKLOAD</span><h2>Task statistics</h2></div><Link to="/reports" className="quiet-link">Full report <ArrowUpRight size={14} /></Link></div>
         <div className="breakdowns-grid">{loading ? <div className="dashboard-loading-bars"><Skeleton /><Skeleton /><Skeleton /><Skeleton /></div> : <><Breakdown title="By status" items={(dashboard?.breakdown?.status || []).map((item) => ({ ...item, label: item._id }))} colorClass="fill-teal" emptyLabel="No task data yet." /><Breakdown title="By priority" items={(dashboard?.breakdown?.priority || []).map((item) => ({ ...item, label: item._id }))} colorClass="fill-ink" emptyLabel="No task data yet." /></>}</div>
-        <div className="completion-trend"><div className="trend-copy"><span className="section-label">LAST 7 DAYS</span><strong>Completed work</strong><small>Tasks still completed, grouped by completion date</small></div><div className="trend-chart" role="img" aria-label="Tasks currently completed over the last seven days">{(dashboard?.completionTrend || Array.from({ length: 7 }, (_, index) => ({ label: ['M', 'T', 'W', 'T', 'F', 'S', 'S'][index], count: 0 }))).map((item, index) => {
+        <div className="completion-trend"><div className="trend-copy"><span className="section-label">LAST 7 DAYS</span><strong>Completed work</strong><small>Tasks still completed, grouped by completion date</small></div><div className="trend-chart" role="group" aria-label="Tasks currently completed over the last seven days">{(dashboard?.completionTrend || Array.from({ length: 7 }, (_, index) => ({ label: ['M', 'T', 'W', 'T', 'F', 'S', 'S'][index], count: 0 }))).map((item, index) => {
           const values = dashboard?.completionTrend || [];
           const max = Math.max(1, ...values.map((value) => value.count || 0));
-          return <div className="trend-day" key={item.date || `${item.label}-${index}`}><span className="trend-bar-bg"><motion.span className="trend-bar" initial={{ height: 0 }} animate={{ height: `${Math.max(5, (item.count / max) * 100)}%` }} transition={{ duration: 0.4, delay: index * 0.03 }} /></span><small>{item.label}</small></div>;
+          return <div className="trend-day" key={item.date || `${item.label}-${index}`} tabIndex={0} aria-label={`${item.date || item.label}: ${item.count} completed tasks`}><span className="trend-value">{item.count}</span><span className="trend-bar-bg"><motion.span className="trend-bar" initial={{ height: 0 }} animate={{ height: `${(item.count / max) * 100}%` }} transition={{ duration: 0.4, delay: index * 0.03 }} /></span><small>{item.label}</small></div>;
         })}</div></div>
       </section>
       <section className="surface-card deadlines-card"><div className="section-header"><div><span className="section-label">NEXT UP</span><h2>Upcoming deadlines</h2></div><Link to="/calendar" className="icon-link" aria-label="Open calendar"><ArrowRight size={16} /></Link></div>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CalendarDays, Check, Clock3, Edit3, Flag, Tag, Trash2, UserRound } from 'lucide-react';
-import { Avatar, Button, ConfirmDialog, PageHeader, PriorityBadge, SelectField, Skeleton, StatusBadge } from '../../components/common/Primitives';
+import { Avatar, Button, ConfirmDialog, LoadError, PageHeader, PriorityBadge, SelectField, Skeleton, StatusBadge } from '../../components/common/Primitives';
 import SpringCheck from '../../components/tasks/SpringCheck';
 import SubtaskChecklist from '../../components/tasks/SubtaskChecklist';
 import TaskCommentsPanel from '../../components/tasks/TaskCommentsPanel';
@@ -74,7 +74,7 @@ export default function TaskDetailsPage() {
     finally { setDeleting(false); }
   };
   if (loading) return <div className="detail-loading"><Skeleton className="skeleton-title" /><Skeleton className="skeleton-line" /><Skeleton className="skeleton-panel" /></div>;
-  if (error || !task) return <div className="error-page"><div className="inline-error" role="alert">{error || 'Task not found.'}</div><Link className="button button-secondary" to="/tasks"><ArrowLeft size={15} />Back to tasks</Link></div>;
+  if (error || !task) return <LoadError message={error || 'Task not found.'} onRetry={() => { setLoading(true); void load(); }} backTo="/tasks" backLabel="Back to tasks" />;
   const overdue = isDueDateOverdue(task.dueDate) && task.status !== 'Completed';
   const people = assignedPeople(task);
 

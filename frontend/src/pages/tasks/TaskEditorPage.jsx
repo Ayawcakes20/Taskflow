@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CalendarDays, Save } from 'lucide-react';
-import { Button, PageHeader, SelectField, TextAreaField } from '../../components/common/Primitives';
+import { Button, LoadError, PageHeader, SelectField, TextAreaField } from '../../components/common/Primitives';
+import UnsavedChanges from '../../components/common/UnsavedChanges';
 import AssigneeMultiSelect from '../../components/tasks/AssigneeMultiSelect';
 import TaskImagePicker from '../../components/tasks/TaskImagePicker';
 import SubtaskChecklist from '../../components/tasks/SubtaskChecklist';
@@ -32,14 +33,22 @@ export default function TaskEditorPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [titleError, setTitleError] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const [retry, setRetry] = useState(0);
+  const [loadedId, setLoadedId] = useState(null);
+  const [baseline, setBaseline] = useState(JSON.stringify(emptyForm));
 
   useEffect(() => {
     let active = true;
+    setLoading(editing);
+    setLoadError('');
+    setLoadedId(null);
+    if (!editing) { setForm(emptyForm); setBaseline(JSON.stringify(emptyForm)); }
     taskService.users().then((items) => { if (active) setUsers(items); }).catch(() => {});
     if (editing) taskService.get(id).then(({ task }) => {
       if (!active) return;
       const people = assignedPeople(task);
-      setForm({
+      const nextForm = {
         title: task.title || '',
         description: task.description || '',
         priority: task.priority || 'Medium',
@@ -50,10 +59,13 @@ export default function TaskEditorPage() {
         imageUrl: task.imageUrl || null,
         imageThumbnail: task.imageThumbnail || null,
         subtasks: Array.isArray(task.subtasks) ? task.subtasks : [],
-      });
-    }).catch((requestError) => { if (active) setError(getMessage(requestError, 'Unable to load this task.')); }).finally(() => { if (active) setLoading(false); });
+      };
+      setForm(nextForm);
+      setBaseline(JSON.stringify(nextForm));
+      setLoadedId(id);
+    }).catch((requestError) => { if (active) setLoadError(getMessage(requestError, 'Unable to load this task.')); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [editing, id]);
+  }, [editing, id, retry]);
 
   const update = (key) => (event) => {
     setForm((current) => ({ ...current, [key]: event.target.value }));
@@ -68,6 +80,7 @@ export default function TaskEditorPage() {
 
   const submit = async (event) => {
     event.preventDefault();
+    if (saving || (editing && loadedId !== id)) return;
     if (event.currentTarget.contains(document.activeElement) && document.activeElement?.id === 'new-subtask-title') return;
     if (!form.title.trim()) { setTitleError('Enter a title for this task.'); return; }
     if (form.title.trim().length > 180) { setTitleError('Keep the title under 180 characters.'); return; }
@@ -99,8 +112,10 @@ export default function TaskEditorPage() {
     event.target.closest('.subtask-add-form')?.querySelector('button[type="button"]')?.click();
   };
 
-  if (loading) return <div className="page-loading"><span className="spin-inline" />Loading task details</div>;
+  if (loadError) return <LoadError message={loadError} onRetry={() => setRetry((value) => value + 1)} backTo="/tasks" backLabel="Back to tasks" />;
+  if (loading || (editing && loadedId !== id)) return <div className="page-loading" role="status"><span className="spin-inline" />Loading task details</div>;
   return <>
+    <UnsavedChanges dirty={JSON.stringify(form) !== baseline && !saving} />
     <PageHeader eyebrow={editing ? 'TASK DETAILS' : 'NEW WORK'} title={editing ? 'Edit task' : 'Create a task'} description={editing ? 'Keep the details current as work evolves.' : 'Give this piece of work a clear next step.'} actions={<Link className="button button-secondary" to={editing ? `/tasks/${id}` : '/tasks'}><ArrowLeft size={15} />Cancel</Link>} />
     <form className="editor-layout" onSubmit={submit} onKeyDownCapture={handleEditorKeyDown}>
       <section className="form-panel">

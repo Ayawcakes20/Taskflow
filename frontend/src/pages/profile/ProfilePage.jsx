@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Camera, ImagePlus, Save, Shield, UserRound, X } from 'lucide-react';
-import { Avatar, Button, PageHeader, Skeleton } from '../../components/common/Primitives';
+import { Avatar, Button, LoadError, PageHeader, Skeleton } from '../../components/common/Primitives';
+import UnsavedChanges from '../../components/common/UnsavedChanges';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import api, { getMessage } from '../../services/api';
@@ -23,17 +24,23 @@ export default function ProfilePage() {
   const [photoPreview, setPhotoPreview] = useState('');
   const [error, setError] = useState('');
   const [photoError, setPhotoError] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const [retry, setRetry] = useState(0);
+  const [loadedId, setLoadedId] = useState(null);
+  const [baseline, setBaseline] = useState(JSON.stringify(emptyForm));
 
   useEffect(() => {
     let active = true;
+    setLoading(true); setLoadError(''); setLoadedId(null);
     api.get(`/users/${user._id}`).then(({ data }) => {
       if (!active) return;
       const profile = data.data.user;
-      setForm({ firstName: profile.firstName || '', lastName: profile.lastName || '', username: profile.username || '', email: profile.email || '', profileImage: profile.profileImage || '' });
+      const nextForm = { firstName: profile.firstName || '', lastName: profile.lastName || '', username: profile.username || '', email: profile.email || '', profileImage: profile.profileImage || '' };
+      setForm(nextForm); setBaseline(JSON.stringify(nextForm)); setLoadedId(user._id);
       setSummary(data.data.summary || { createdTasks: 0, assignedTasks: 0 });
-    }).catch((requestError) => { if (active) setError(getMessage(requestError, 'Unable to load your profile.')); }).finally(() => { if (active) setLoading(false); });
+    }).catch((requestError) => { if (active) setLoadError(getMessage(requestError, 'Unable to load your profile.')); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [user._id]);
+  }, [user._id, retry]);
 
   useEffect(() => () => { if (photoPreview.startsWith('blob:')) URL.revokeObjectURL(photoPreview); }, [photoPreview]);
 
@@ -66,6 +73,7 @@ export default function ProfilePage() {
       const { imageUrl } = await prepareTaskImage(selectedPhoto);
       const { data } = await api.put(`/users/${user._id}`, { profileImage: imageUrl });
       setForm((current) => ({ ...current, profileImage: data.data.user.profileImage || '' }));
+      setBaseline((current) => JSON.stringify({ ...JSON.parse(current), profileImage: data.data.user.profileImage || '' }));
       setUser(data.data.user);
       cancelPhoto();
       toast({ title: 'Profile photo updated successfully.' });
@@ -76,19 +84,21 @@ export default function ProfilePage() {
 
   const save = async (event) => {
     event.preventDefault(); setError('');
+    if (saving || loadedId !== user._id) return;
     if (!form.firstName.trim() || !form.lastName.trim() || !form.username.trim() || !form.email.trim()) { setError('First name, last name, username, and email are required.'); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) { setError('Enter a valid email address.'); return; }
     setSaving(true);
-    try { const { data } = await api.put(`/users/${user._id}`, profilePayload(form)); setUser(data.data.user); toast({ title: 'Profile updated successfully.' }); }
+    try { const { data } = await api.put(`/users/${user._id}`, profilePayload(form)); setUser(data.data.user); setBaseline(JSON.stringify(form)); toast({ title: 'Profile updated successfully.' }); }
     catch (requestError) { setError(getMessage(requestError, 'Unable to update your profile.')); }
     finally { setSaving(false); }
   };
 
-  if (loading) return <div className="profile-loading"><Skeleton className="skeleton-title" /><Skeleton className="skeleton-panel" /></div>;
+  if (loadError) return <LoadError message={loadError} onRetry={() => setRetry((value) => value + 1)} />;
+  if (loading || loadedId !== user._id) return <div className="profile-loading" role="status" aria-label="Loading profile"><Skeleton className="skeleton-title" /><Skeleton className="skeleton-panel" /></div>;
   const displayedUser = { ...user, ...form, profileImage: photoPreview || form.profileImage };
   return <>
+    <UnsavedChanges dirty={(JSON.stringify(form) !== baseline || Boolean(selectedPhoto)) && !saving && !savingPhoto} />
     <PageHeader eyebrow="YOUR ACCOUNT" title="Profile" description="The details your workspace uses to recognize you." />
-    {error && <div className="inline-error" role="alert">{error}</div>}
     <div className="profile-layout">
       <section className="surface-card profile-form-panel">
         <div className="profile-identity profile-photo-section">

@@ -1,11 +1,15 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { motion, useReducedMotion } from 'motion/react';
 import { LoaderCircle } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { ToastProvider } from './context/ToastContext';
 import AppShell from './components/layout/AppShell';
+
+function NotFound() {
+  return <section className="not-found surface-card"><span className="eyebrow">404</span><h1>Page not found</h1><p>This address does not lead to a Taskflow page.</p><Link className="button button-primary" to="/dashboard">Open workspace</Link><Link className="button button-secondary" to="/">Taskflow home</Link></section>;
+}
 
 const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
 const LandingPage = lazy(() => import('./pages/public/LandingPage'));
@@ -82,9 +86,9 @@ function AppRouter() {
             <Route path="/admin/users" element={<Page><AdminUsersPage /></Page>} />
             <Route path="/admin/activity" element={<Page><AdminActivityPage /></Page>} />
           </Route>
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Route>
+      <Route path="*" element={<NotFound />} />
     </Routes>
   </Suspense>;
 }
