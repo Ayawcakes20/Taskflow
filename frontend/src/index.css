@@ -1475,3 +1475,12 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 4px; backg
 .report-trend-chart { position: relative; }
 .report-trend-column { position: static; }
 .report-trend-column .chart-detail, .report-trend-column:first-child .chart-detail, .report-trend-column:last-child .chart-detail { left: 50%; right: auto; transform: translateX(-50%); max-width: 100%; }
+
+/* Phase 3 keeps the existing auth layout and limits additions to verification. */
+.verification-destination { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; margin: 0 0 20px; }
+.otp-input { font-size: 22px; letter-spacing: .24em; font-variant-numeric: tabular-nums; }
+.otp-input::placeholder { font-size: 15px; letter-spacing: normal; }
+.verification-resend { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 18px; }
+.auth-verification-screen .auth-copy h1 { overflow-wrap: anywhere; }
+.inline-success { padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; color: var(--brand); font-size: 14px; }
+@media (max-width: 480px) { .verification-resend { align-items: flex-start; flex-direction: column; } }

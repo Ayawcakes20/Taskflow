@@ -4,6 +4,7 @@
 import { createRequire } from 'node:module';
 import { createServer } from 'vite';
 import { workspaceDayKey } from '../src/utils/workspaceDates.js';
+import { randomBytes } from 'node:crypto';
 
 if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
   throw new Error('The local UI fixture must not run in production.');
@@ -19,6 +20,7 @@ const user = { _id: '507f1f77bcf86cd799439011', firstName: 'Alexandria', lastNam
 const people = [user, { ...user, _id: '507f1f77bcf86cd799439012', firstName: 'Miguel', lastName: 'Garcia', username: 'miguel.fixture', email: 'miguel@example.invalid', role: 'User' }];
 let authenticated = true;
 let errors = false;
+const verificationFixture = () => ({ challengeId: randomBytes(32).toString('hex'), emailHint: 'f***@example.invalid', expiresAt: new Date(Date.now() + 300000).toISOString(), resendAt: new Date(Date.now() + 60000).toISOString() });
 const tasks = Array.from({ length: 12 }, (_, index) => ({
   _id: (index + 1).toString(16).padStart(24, '0'),
   title: index === 0 ? 'Review presentation requirements and prepare the final project demonstration' : index === 1 ? 'LongUnbrokenTaskTitleForResponsiveLayoutVerification'.repeat(3) : ['Design the onboarding flow', 'Verify task assignments', 'Prepare module screenshots', 'Review project documentation'][index % 4],
@@ -38,6 +40,10 @@ const paginate = (items, query) => {
 
 app.get('/__fixture', (_req, res) => res.send('<h1>Taskflow local UI fixture</h1><p>Invented in-memory data; no production connection.</p><a href="/__fixture/admin">Admin workspace</a> · <a href="/__fixture/user">User workspace</a> · <a href="/__fixture/guest">Public pages</a> · <a href="/__fixture/errors">Failure states</a>'));
 app.get('/__fixture/:mode', (req, res) => {
+  if (req.params.mode === 'verification') {
+    authenticated = false; errors = false;
+    return res.send(`<script>sessionStorage.setItem('taskflow:registration-challenge', ${JSON.stringify(JSON.stringify(verificationFixture()))}); location.replace('/register/verify');</script>`);
+  }
   authenticated = req.params.mode !== 'guest'; errors = req.params.mode === 'errors'; user.role = req.params.mode === 'user' ? 'User' : 'Admin';
   res.redirect(authenticated ? '/dashboard' : '/');
 });
@@ -45,7 +51,10 @@ app.use('/api', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const success = (data = {}) => res.json({ success: true, data });
   if (req.path === '/auth/me') return authenticated ? success({ user }) : res.status(401).json({ success: false, message: 'Please sign in to continue.' });
-  if (req.path === '/auth/login' || req.path === '/auth/register') { authenticated = true; return success({ user }); }
+  if (req.path === '/auth/register' || req.path === '/auth/register/resend' || req.path === '/auth/forgot-password' || req.path === '/auth/forgot-password/resend') return success(verificationFixture());
+  if (req.path === '/auth/forgot-password/verify') return success({ resetToken: randomBytes(32).toString('hex'), expiresAt: new Date(Date.now() + 300000).toISOString() });
+  if (req.path === '/auth/reset-password') return success();
+  if (req.path === '/auth/login' || req.path === '/auth/register/verify') { authenticated = true; return success({ user }); }
   if (req.path === '/auth/logout') { authenticated = false; return success(); }
   if (!authenticated) return res.status(401).json({ success: false, message: 'Please sign in to continue.' });
   if (errors) return res.status(503).json({ success: false, message: 'Local fixture: data is temporarily unavailable.' });

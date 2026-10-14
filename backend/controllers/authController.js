@@ -4,6 +4,7 @@ import ActivityLog from '../models/ActivityLog.js';
 import { ApiError } from '../middleware/errorMiddleware.js';
 import { loginSchema, passwordChangeSchema, registerSchema } from '../utils/validation.js';
 import { recordActivity } from '../utils/activity.js';
+import { otpService } from '../utils/otpService.js';
 
 const COOKIE_NAME = () => process.env.SESSION_COOKIE_NAME || 'taskflow_session';
 const DAY = 24 * 60 * 60 * 1000;
@@ -25,7 +26,7 @@ function cookieOptions() {
   };
 }
 
-function setSession(res, user) {
+export function setSession(res, user) {
   res.cookie(COOKIE_NAME(), tokenFor(user), cookieOptions());
 }
 
@@ -38,15 +39,8 @@ export async function register(req, res) {
   const values = registerSchema.parse(req.body);
   const normalizedEmail = values.email.toLowerCase();
   const normalizedUsername = values.username.toLowerCase();
-  const duplicate = await User.findOne({ $or: [{ email: normalizedEmail }, { username: normalizedUsername }] }).select('_id email username');
-  if (duplicate) {
-    throw new ApiError(409, duplicate.email === normalizedEmail ? 'An account with this email already exists.' : 'That username is already in use.');
-  }
-
-  const user = await User.create({ ...values, email: normalizedEmail, username: normalizedUsername });
-  setSession(res, user);
-  await recordActivity({ actor: user._id, action: 'user.registered', entityType: 'user', entityId: user._id, entityTitle: `${user.firstName} ${user.lastName}` });
-  res.status(201).json({ success: true, data: { user: user.toJSON() } });
+  const challenge = await otpService.issue('registration', normalizedEmail, { ...values, email: normalizedEmail, username: normalizedUsername });
+  res.status(202).json({ success: true, data: challenge });
 }
 
 export async function login(req, res) {

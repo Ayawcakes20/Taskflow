@@ -48,6 +48,15 @@ export const loginSchema = z.object({
   password: z.string().min(1, 'Password is required.'),
 });
 
+export const otpRequestSchema = z.object({ email });
+export const otpChallengeSchema = z.object({ challengeId: z.string().regex(/^[a-f0-9]{64}$/, 'Start a new verification request.') });
+export const otpVerifySchema = otpChallengeSchema.extend({ code: z.string().regex(/^\d{6}$/, 'Enter the six-digit code.') });
+export const passwordResetSchema = otpChallengeSchema.extend({
+  resetToken: z.string().regex(/^[a-f0-9]{64}$/, 'Verify your recovery code again.'),
+  newPassword: password,
+  confirmPassword: z.string().min(1, 'Confirm your password.'),
+}).refine((data) => data.newPassword === data.confirmPassword, { path: ['confirmPassword'], message: 'Passwords do not match.' });
+
 export const taskSchema = z.object({
   title: taskTitle,
   description: taskDescription.optional().default(''),

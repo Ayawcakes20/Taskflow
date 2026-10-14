@@ -60,6 +60,11 @@ export function AuthProvider({ children }) {
 
   const register = useCallback(async (values) => {
     const { data } = await api.post('/auth/register', values);
+    return data.data;
+  }, []);
+
+  const verifyRegistration = useCallback(async (values) => {
+    const { data } = await api.post('/auth/register/verify', values);
     verification.current?.abort();
     setUser(data.data.user);
     setSessionError(false);
@@ -72,7 +77,7 @@ export function AuthProvider({ children }) {
     try { await api.post('/auth/logout'); } finally { setUser(null); setSessionError(false); setLoading(false); }
   }, []);
 
-  const value = useMemo(() => ({ user, loading, sessionError, login, register, logout, refreshUser, setUser }), [user, loading, sessionError, login, register, logout, refreshUser]);
+  const value = useMemo(() => ({ user, loading, sessionError, login, register, verifyRegistration, logout, refreshUser, setUser }), [user, loading, sessionError, login, register, verifyRegistration, logout, refreshUser]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

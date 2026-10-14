@@ -14,6 +14,8 @@ import { MongoRateLimitStore, RATE_LIMIT_COLLECTION } from '../utils/mongoRateLi
 import { createAuthRateLimits } from '../middleware/authRateLimits.js';
 import { errorMiddleware } from '../middleware/errorMiddleware.js';
 import { databaseReady } from '../middleware/databaseReady.js';
+import { emailDelivery } from '../utils/otpEmail.js';
+import { OTP_COLLECTION } from '../utils/otpStore.js';
 
 const envFile = fileURLToPath(new URL('../.env', import.meta.url));
 const fingerprint = () => createHash('sha256').update(readFileSync(envFile)).digest('hex');
@@ -30,6 +32,9 @@ process.env.VERCEL = '1'; // Exercise default-export mode, with no automatic lis
 const marker = `deploy_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
 const userNames = [`${marker}_a`, `${marker}_b`];
 const counterIds = new Set();
+const emailCodes = new Map();
+const originalEmailSend = emailDelivery.send;
+const originalEmailConfiguration = emailDelivery.assertConfigured;
 const servers = [];
 let vite;
 let passed = 0;
@@ -64,6 +69,10 @@ try {
     assert.equal((await mongoose.connection.db.command({ ping: 1 })).ok, 1);
   });
 
+  // Email is mocked only inside this explicitly isolated opt-in script.
+  emailDelivery.assertConfigured = () => { isolated(); };
+  emailDelivery.send = async ({ email, code }) => { isolated(); emailCodes.set(email, code); };
+
   const { default: app } = await import('../server.js');
   const { default: User } = await import('../models/User.js');
   isolated();
@@ -71,7 +80,7 @@ try {
   ownsFixtures = true;
   const ip = `2001:db8:${randomBytes(2).toString('hex')}:${randomBytes(2).toString('hex')}::1`;
   const key = ipKeyGenerator(ip);
-  for (const prefix of ['credentials', 'sessions']) {
+  for (const prefix of ['credentials', 'sessions', 'otp-requests', 'otp-verifications']) {
     const id = new MongoRateLimitStore(prefix).key(key);
     assert.equal(await mongoose.connection.db.collection(RATE_LIMIT_COLLECTION).findOne({ _id: id }), null, 'Fixture counter collision');
     counterIds.add(id);
@@ -89,13 +98,16 @@ try {
 
   let cookie;
   let outsiderCookie;
-  await check('registration sets HttpOnly Secure SameSite=Lax JWT cookies', async () => {
+  await check('registration issues no session until mocked email verification sets secure JWT cookies', async () => {
     for (const [index, username] of userNames.entries()) {
       const result = await request('/auth/register', { method: 'POST', body: {
         firstName: 'Deployment', lastName: 'Fixture', username, email: `${username}@example.invalid`, password: 'FixturePassword123!', confirmPassword: 'FixturePassword123!',
       } });
-      assert.equal(result.status, 201);
-      const header = result.headers.get('set-cookie');
+      assert.equal(result.status, 202);
+      assert.equal(result.headers.get('set-cookie'), null);
+      const verified = await request('/auth/register/verify', { method: 'POST', body: { challengeId: result.data.data.challengeId, code: emailCodes.get(`${username}@example.invalid`) } });
+      assert.equal(verified.status, 201);
+      const header = verified.headers.get('set-cookie');
       assert.match(header, /HttpOnly/i);
       assert.match(header, /Secure/i);
       assert.match(header, /SameSite=Lax/i);
@@ -263,6 +275,9 @@ try {
   console.error(`FAIL ${currentCheck} (${category}). Sensitive error details suppressed.`);
   process.exitCode = 1;
 } finally {
+  emailDelivery.send = originalEmailSend;
+  emailDelivery.assertConfigured = originalEmailConfiguration;
+  emailCodes.clear();
   try {
     if (vite) await vite.close();
     for (const server of servers) await new Promise((resolve) => server.close(resolve));
@@ -278,6 +293,7 @@ try {
       await db.collection('notifications').deleteMany({ user: { $in: ids } });
       await db.collection('activitylogs').deleteMany({ actor: { $in: ids } });
       await db.collection('users').deleteMany({ _id: { $in: ids }, username: { $in: userNames } });
+      await db.collection(OTP_COLLECTION).deleteMany({ email: { $in: userNames.map((username) => `${username}@example.invalid`) } });
       await db.collection(RATE_LIMIT_COLLECTION).deleteMany({ _id: { $in: [...counterIds] } });
       console.info('Isolated fixtures removed from taskflow_test; existing records retained.');
     }

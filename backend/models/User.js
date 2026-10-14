@@ -36,6 +36,7 @@ userSchema.index({ lastName: 1, firstName: 1 });
 
 userSchema.pre('save', async function hashPassword() {
   if (!this.isModified('password')) return;
+  if (this.$locals.passwordPrehashed === true && /^\$2[aby]\$12\$[./A-Za-z0-9]{53}$/.test(this.password)) return;
   this.password = await bcrypt.hash(this.password, 12);
 });
 
