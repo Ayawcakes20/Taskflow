@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import express from 'express';
+import nodemailer from 'nodemailer';
 import User from '../models/User.js';
 import ActivityLog from '../models/ActivityLog.js';
 import { OtpStore } from '../utils/otpStore.js';
@@ -240,14 +241,59 @@ test('recovery update atomically increments sessionVersion and supports legacy m
   assert.deepEqual(update.$inc, { sessionVersion: 1 });
 });
 
-test('email delivery refuses missing configuration and sanitizes provider failures without a fake success', async (t) => {
-  const values = { RESEND_API_KEY: process.env.RESEND_API_KEY, OTP_EMAIL_FROM: process.env.OTP_EMAIL_FROM };
+function smtpFixture(t) {
+  const values = { SMTP_USER: process.env.SMTP_USER, SMTP_APP_PASSWORD: process.env.SMTP_APP_PASSWORD };
   t.after(() => { for (const [key, value] of Object.entries(values)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
-  delete process.env.RESEND_API_KEY; delete process.env.OTP_EMAIL_FROM;
-  assert.throws(() => emailDelivery.assertConfigured(), (error) => error.statusCode === 503);
-  process.env.RESEND_API_KEY = 'mock-only'; process.env.OTP_EMAIL_FROM = 'Taskflow <fixture@example.invalid>';
-  t.mock.method(globalThis, 'fetch', async () => ({ ok: false }));
-  await assert.rejects(emailDelivery.send({ email: registration.email, code: '123456', purpose: 'registration', challengeId: 'fixture' }), (error) => error.statusCode === 503 && !error.message.includes('mock-only'));
+  process.env.SMTP_USER = 'sender@example.invalid';
+  process.env.SMTP_APP_PASSWORD = 'abcd efgh ijkl mnop';
+}
+
+test('SMTP delivery rejects missing or malformed configuration without opening a connection', async (t) => {
+  smtpFixture(t); let connects = 0;
+  t.mock.method(nodemailer, 'createTransport', () => { connects++; });
+  for (const [user, password] of [['', 'abcdefghijklmnop'], ['sender@example.invalid', ''], ['sender@example.invalid\r\nInjected', 'abcdefghijklmnop'], ['sender@example.invalid', 'not-an-app-password']]) {
+    process.env.SMTP_USER = user; process.env.SMTP_APP_PASSWORD = password;
+    await assert.rejects(emailDelivery.send({ email: registration.email, code: '123456', purpose: 'registration' }), (error) => error.statusCode === 503);
+  }
+  assert.equal(connects, 0);
+});
+
+test('Gmail SMTP delivers both existing OTP templates with TLS, bounded timeouts and backend-only credentials', async (t) => {
+  smtpFixture(t); const messages = []; let options;
+  t.mock.method(nodemailer, 'createTransport', (value) => { options = value; return { async sendMail(message) { messages.push(message); return { accepted: [registration.email] }; } }; });
+  for (const purpose of ['registration', 'recovery']) await emailDelivery.send({ email: registration.email, code: '123456', purpose });
+  assert.equal(options.host, 'smtp.gmail.com'); assert.equal(options.port, 465); assert.equal(options.secure, true);
+  assert.equal(options.pool, false); assert.equal(options.logger, false); assert.equal(options.debug, false);
+  assert.equal(options.connectionTimeout, 5000); assert.equal(options.greetingTimeout, 5000); assert.equal(options.socketTimeout, 10000);
+  assert.ok(options.auth.pass.length === 16 && !/\s/.test(options.auth.pass));
+  assert.deepEqual(messages[0].from, { name: 'Taskflow', address: process.env.SMTP_USER });
+  assert.equal(messages[0].to, registration.email);
+  assert.ok(messages.every((message) => message.text.includes('123456') && message.html.includes('123456')));
+  assert.match(messages[0].subject, /Verify your email/); assert.match(messages[1].subject, /Reset your password/);
+});
+
+test('SMTP failures log only safe categories and status numbers, never credentials, codes or server replies', async (t) => {
+  smtpFixture(t); const logs = [];
+  t.mock.method(console, 'error', (...values) => logs.push(values));
+  for (const [code, responseCode, category] of [['EAUTH', 535, 'authentication'], ['ETIMEDOUT', undefined, 'timeout'], ['ESOCKET', undefined, 'connection'], ['EDNS', undefined, 'dns']]) {
+    t.mock.method(nodemailer, 'createTransport', () => ({ async sendMail() {
+      throw Object.assign(new Error('SENSITIVE_SERVER_RESPONSE'), { code, responseCode, response: 'SENSITIVE_SERVER_RESPONSE' });
+    } }));
+    await assert.rejects(emailDelivery.send({ email: registration.email, code: '123456', purpose: 'registration' }), (error) => error.statusCode === 503 && error.message === 'Email delivery is temporarily unavailable. Please try again shortly.');
+    assert.equal(logs.at(-1)[1].category, category);
+    assert.equal(logs.at(-1)[1].responseCode, responseCode);
+  }
+  const output = JSON.stringify(logs);
+  assert.ok(!output.includes('SENSITIVE_SERVER_RESPONSE') && !output.includes(registration.email) && !output.includes(process.env.SMTP_USER)
+    && !output.includes('123456') && !output.includes(process.env.SMTP_APP_PASSWORD.replace(/\s/g, '')));
+});
+
+test('SMTP recipient rejection does not report a successful delivery', async (t) => {
+  smtpFixture(t); const logs = [];
+  t.mock.method(console, 'error', (...values) => logs.push(values));
+  t.mock.method(nodemailer, 'createTransport', () => ({ async sendMail() { return { accepted: [], rejected: [registration.email], response: 'SENSITIVE_SERVER_RESPONSE' }; } }));
+  await assert.rejects(emailDelivery.send({ email: registration.email, code: '123456', purpose: 'recovery' }), (error) => error.statusCode === 503);
+  assert.deepEqual(logs[0][1], { category: 'recipient' });
 });
 
 test('OTP request and verification limits are separate and use existing shared production stores', async (t) => {

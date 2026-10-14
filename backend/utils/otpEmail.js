@@ -1,9 +1,22 @@
 import { ApiError } from '../middleware/errorMiddleware.js';
+import nodemailer from 'nodemailer';
+
+function smtpCredentials() {
+  return { user: process.env.SMTP_USER?.trim() || '', pass: process.env.SMTP_APP_PASSWORD?.replace(/\s/g, '') || '' };
+}
 
 export function assertEmailConfigured() {
-  if (!process.env.RESEND_API_KEY || !process.env.OTP_EMAIL_FROM || /[\r\n]/.test(process.env.OTP_EMAIL_FROM)) {
+  const { user, pass } = smtpCredentials();
+  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(user) || !/^[A-Za-z0-9]{16}$/.test(pass)) {
     throw new ApiError(503, 'Email verification is not configured. Please try again later.');
   }
+}
+
+function smtpDiagnostic(error) {
+  const categories = { EAUTH: 'authentication', ETIMEDOUT: 'timeout', EDNS: 'dns', ECONNECTION: 'connection',
+    ESOCKET: 'connection', ECONNRESET: 'connection', ECONNREFUSED: 'connection', EENVELOPE: 'recipient', EMESSAGE: 'message' };
+  return { category: Object.hasOwn(categories, error?.code) ? categories[error.code] : 'smtp',
+    ...(Number.isInteger(error?.responseCode) && error.responseCode >= 100 && error.responseCode <= 599 ? { responseCode: error.responseCode } : {}) };
 }
 
 export function otpEmailTemplate(code, purpose) {
@@ -15,15 +28,24 @@ export function otpEmailTemplate(code, purpose) {
 
 export const emailDelivery = {
   assertConfigured: assertEmailConfigured,
-  async send({ email, code, purpose, challengeId }) {
+  async send({ email, code, purpose }) {
     assertEmailConfigured();
     try {
-      const response = await fetch('https://api.resend.com/emails', {
-        method: 'POST', signal: AbortSignal.timeout(10000),
-        headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': `taskflow-${challengeId}` },
-        body: JSON.stringify({ from: process.env.OTP_EMAIL_FROM, to: [email], ...otpEmailTemplate(code, purpose) }),
+      const auth = smtpCredentials();
+      // One awaited SMTP connection per email; no pool or background retries on Vercel.
+      const transport = nodemailer.createTransport({
+        host: 'smtp.gmail.com', port: 465, secure: true, auth,
+        connectionTimeout: 5000, greetingTimeout: 5000, socketTimeout: 10000,
+        pool: false, logger: false, debug: false, disableFileAccess: true, disableUrlAccess: true,
       });
-      if (!response.ok || !(await response.json()).id) throw new Error('Email not accepted');
-    } catch { throw new ApiError(503, 'Email delivery is temporarily unavailable. Please try again shortly.'); }
+      const result = await transport.sendMail({ from: { name: 'Taskflow', address: auth.user }, to: email, ...otpEmailTemplate(code, purpose) });
+      if (!result?.accepted?.some((address) => typeof address === 'string' && address.toLowerCase() === email.toLowerCase())) {
+        throw Object.assign(new Error('SMTP did not accept the recipient'), { code: 'EENVELOPE' });
+      }
+    } catch (error) {
+      // Never log the Error itself: SMTP responses can include addresses or AUTH data.
+      console.error('Taskflow OTP SMTP delivery failed.', smtpDiagnostic(error));
+      throw new ApiError(503, 'Email delivery is temporarily unavailable. Please try again shortly.');
+    }
   },
 };
