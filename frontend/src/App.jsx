@@ -14,7 +14,6 @@ function NotFound() {
 const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
 const LandingPage = lazy(() => import('./pages/public/LandingPage'));
 const RegisterPage = lazy(() => import('./pages/auth/RegisterPage'));
-const VerifyRegistrationPage = lazy(() => import('./pages/auth/VerifyRegistrationPage'));
 const ForgotPasswordPage = lazy(() => import('./pages/auth/ForgotPasswordPage'));
 const DashboardPage = lazy(() => import('./pages/dashboard/DashboardPage'));
 const TasksPage = lazy(() => import('./pages/tasks/TasksPage'));
@@ -69,7 +68,7 @@ function AppRouter() {
       <Route element={<Guest />}>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
-        <Route path="/register/verify" element={<VerifyRegistrationPage />} />
+        <Route path="/register/verify" element={<Navigate to="/register" replace />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       </Route>
       <Route element={<Protected />}>

@@ -7,7 +7,12 @@ function smtpCredentials() {
 
 export function assertEmailConfigured() {
   const { user, pass } = smtpCredentials();
-  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(user) || !/^[A-Za-z0-9]{16}$/.test(pass)) {
+  const userValid = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(user);
+  const passwordValid = /^[A-Za-z0-9]{16}$/.test(pass);
+  if (!userValid || !passwordValid) {
+    // This check also runs before OTP issuance, outside send's SMTP catch block.
+    console.error('Taskflow OTP email configuration invalid.', { category: 'configuration',
+      userPresent: Boolean(user), userValid, passwordPresent: Boolean(pass), passwordValid });
     throw new ApiError(503, 'Email verification is not configured. Please try again later.');
   }
 }
@@ -15,7 +20,13 @@ export function assertEmailConfigured() {
 function smtpDiagnostic(error) {
   const categories = { EAUTH: 'authentication', ETIMEDOUT: 'timeout', EDNS: 'dns', ECONNECTION: 'connection',
     ESOCKET: 'connection', ECONNRESET: 'connection', ECONNREFUSED: 'connection', EENVELOPE: 'recipient', EMESSAGE: 'message' };
+  const stages = { CONN: 'connection', EHLO: 'greeting', HELO: 'greeting', STARTTLS: 'tls',
+    'AUTH PLAIN': 'authentication', 'AUTH LOGIN': 'authentication', AUTH: 'authentication',
+    'MAIL FROM': 'sender', 'RCPT TO': 'recipient', DATA: 'message' };
+  const timeoutTypes = ['CONNECT_TIMEOUT', 'CONNECTION_TIMEOUT', 'GREETING_TIMEOUT', 'UPGRADE_TIMEOUT', 'SOCKET_TIMEOUT', 'DNS_TIMEOUT'];
   return { category: Object.hasOwn(categories, error?.code) ? categories[error.code] : 'smtp',
+    ...(Object.hasOwn(stages, error?.command) ? { stage: stages[error.command] } : {}),
+    ...(timeoutTypes.includes(error?.timeoutType) ? { timeoutType: error.timeoutType } : {}),
     ...(Number.isInteger(error?.responseCode) && error.responseCode >= 100 && error.responseCode <= 599 ? { responseCode: error.responseCode } : {}) };
 }
 
@@ -30,6 +41,8 @@ export const emailDelivery = {
   assertConfigured: assertEmailConfigured,
   async send({ email, code, purpose }) {
     assertEmailConfigured();
+    const started = performance.now();
+    let phase = 'transport_setup';
     try {
       const auth = smtpCredentials();
       // One awaited SMTP connection per email; no pool or background retries on Vercel.
@@ -38,13 +51,14 @@ export const emailDelivery = {
         connectionTimeout: 5000, greetingTimeout: 5000, socketTimeout: 10000,
         pool: false, logger: false, debug: false, disableFileAccess: true, disableUrlAccess: true,
       });
+      phase = 'smtp_send';
       const result = await transport.sendMail({ from: { name: 'Taskflow', address: auth.user }, to: email, ...otpEmailTemplate(code, purpose) });
       if (!result?.accepted?.some((address) => typeof address === 'string' && address.toLowerCase() === email.toLowerCase())) {
         throw Object.assign(new Error('SMTP did not accept the recipient'), { code: 'EENVELOPE' });
       }
     } catch (error) {
       // Never log the Error itself: SMTP responses can include addresses or AUTH data.
-      console.error('Taskflow OTP SMTP delivery failed.', smtpDiagnostic(error));
+      console.error('Taskflow OTP SMTP delivery failed.', { ...smtpDiagnostic(error), phase, elapsedMs: Math.round(performance.now() - started) });
       throw new ApiError(503, 'Email delivery is temporarily unavailable. Please try again shortly.');
     }
   },

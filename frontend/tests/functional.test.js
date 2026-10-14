@@ -482,18 +482,34 @@ function AuthProbe() {
   return React.createElement('span', {}, authSnapshot.user ? 'Authenticated' : 'No verified session');
 }
 
-test('registration issuance does not authenticate and verification alone establishes the existing session', async () => {
+test('direct registration authenticates immediately and retains the existing session refresh behavior', async () => {
   authenticated = false;
   await mount('/register', AuthProbe);
-  const challenge = { challengeId: 'a'.repeat(64), emailHint: 'f***@example.invalid', expiresAt: new Date(Date.now() + 300000).toISOString(), resendAt: new Date(Date.now() + 60000).toISOString() };
   const paths = [];
-  requestHandler = async (config) => { paths.push(config.url); return config.url === '/auth/register' ? challenge : { user }; };
+  requestHandler = async (config) => { paths.push(config.url); return { user }; };
   let result;
   await act(async () => { result = await authSnapshot.register({}); });
-  assert.equal(result.challengeId, challenge.challengeId); assert.equal(authSnapshot.user, null);
-  await act(async () => { await authSnapshot.verifyRegistration({ challengeId: challenge.challengeId, code: '123456' }); });
+  assert.equal(result._id, user._id); assert.equal(authSnapshot.user._id, user._id);
+  authenticated = true;
+  await act(async () => { await authSnapshot.refreshUser(); });
   assert.equal(authSnapshot.user._id, user._id);
-  assert.deepEqual(paths, ['/auth/register', '/auth/register/verify']);
+  assert.deepEqual(paths, ['/auth/register']);
+});
+
+test('valid signup reaches the dashboard directly without any OTP request', async () => {
+  authenticated = false; const paths = [];
+  requestHandler = async (config) => {
+    paths.push(config.url);
+    if (config.url === '/auth/register') { authenticated = true; return { user }; }
+    if (config.url === '/dashboard') return { stats: { total: 0, pending: 0, inProgress: 0, completed: 0, overdue: 0 }, breakdown: { status: [], priority: [] }, completionTrend: [], recentTasks: [], upcomingDeadlines: [], recentActivity: [] };
+    return { items: [], unread: 0 };
+  };
+  await mountApp('/register'); await act(async () => { await sleep(150); });
+  for (const [key, value] of Object.entries({ firstName: 'Defense', lastName: 'Fixture', username: 'defense_fixture', email: 'defense@example.invalid', password: 'FixturePassword123!', confirmPassword: 'FixturePassword123!' })) await fill(container.querySelector(`#${key}`), value);
+  await click(container.querySelector('button[type="submit"]')); await act(async () => { await sleep(150); });
+  assert.equal(window.location.pathname, '/dashboard');
+  assert.equal(paths.filter((path) => path === '/auth/register').length, 1);
+  assert.equal(paths.some((path) => path.includes('verify') || path.includes('resend')), false);
 });
 
 test('OTP entry accepts pasted digits, exposes expiry and blocks resend during cooldown', async () => {
@@ -517,36 +533,22 @@ test('expired verification disables submission but allows requesting a new code'
   assert.equal([...container.querySelectorAll('button')].find((button) => button.textContent === 'Resend code').disabled, false);
 });
 
-test('forgot password progresses through verification and confirmation without logging in or persisting grants', async () => {
-  authenticated = false;
-  const paths = [];
-  const challenge = { challengeId: 'a'.repeat(64), emailHint: 'f***@example.invalid', expiresAt: new Date(Date.now() + 300000).toISOString(), resendAt: new Date(Date.now() + 60000).toISOString() };
-  requestHandler = async (config) => {
-    paths.push(config.url);
-    if (config.url === '/auth/forgot-password') return challenge;
-    if (config.url === '/auth/forgot-password/verify') return { resetToken: 'b'.repeat(64), expiresAt: new Date(Date.now() + 300000).toISOString() };
-    return {};
-  };
+test('forgot password displays temporary unavailability without recovery forms or API requests', async () => {
+  let requests = 0;
+  requestHandler = async () => { requests++; throw new Error('Recovery must stay disabled'); };
   await mount('/forgot-password', '/src/pages/auth/ForgotPasswordPage.jsx');
-  await fill(container.querySelector('#recovery-email'), 'fixture@example.invalid'); await click(container.querySelector('button[type="submit"]'));
-  assert.match(container.textContent, /eligible account/); assert.equal(container.querySelector('#recovery-email'), null);
-  await fill(container.querySelector('#verification-code'), '123456'); await click(container.querySelector('button[type="submit"]'));
-  assert.equal(sessionStorage.getItem('taskflow:recovery-challenge'), null);
-  await fill(container.querySelector('#reset-newPassword'), 'FixturePassword123!'); await fill(container.querySelector('#reset-confirmPassword'), 'DifferentPassword123!');
-  await click(container.querySelector('button[type="submit"]'));
-  assert.match(container.querySelector('[role="alert"]').textContent, /do not match/); assert.equal(paths.includes('/auth/reset-password'), false);
-  await fill(container.querySelector('#reset-confirmPassword'), 'FixturePassword123!'); await click(container.querySelector('button[type="submit"]'));
-  assert.ok(container.querySelector('a[href="/login"]')); assert.match(container.textContent, /Previous sessions/);
-  assert.deepEqual(paths, ['/auth/forgot-password', '/auth/forgot-password/verify', '/auth/reset-password']);
-  assert.equal(window.location.pathname, '/login');
+  assert.match(container.textContent, /temporarily unavailable/);
+  assert.equal(container.querySelector('form'), null); assert.equal(container.querySelector('input'), null);
+  assert.ok(container.querySelector('a[href="/login"]')); assert.equal(requests, 0);
 });
 
-test('forgot password retries delivery errors without displaying a false success', async () => {
-  requestHandler = async () => { throw Object.assign(new Error('Unavailable'), { response: { status: 503, data: { message: 'Email delivery unavailable.' } } }); };
-  await mount('/forgot-password', '/src/pages/auth/ForgotPasswordPage.jsx');
-  await fill(container.querySelector('#recovery-email'), 'fixture@example.invalid'); await click(container.querySelector('button[type="submit"]'));
-  assert.match(container.querySelector('[role="alert"]').textContent, /unavailable/); assert.ok(container.querySelector('#recovery-email'));
-  assert.equal(container.querySelector('#verification-code'), null);
+test('old registration verification URLs return guests to direct registration', async () => {
+  authenticated = false;
+  requestHandler = async () => ({});
+  await mountApp('/register/verify');
+  await act(async () => { await sleep(150); });
+  assert.equal(window.location.pathname, '/register');
+  assert.ok(container.querySelector('#username')); assert.equal(container.querySelector('#verification-code'), null);
 });
 
 test('registration verification reloads only metadata and handles absent challenges safely', async () => {

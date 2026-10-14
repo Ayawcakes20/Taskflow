@@ -1,5 +1,25 @@
 # Taskflow Phase 3 — email verification and password recovery
 
+> **Defense-day temporary rollback:** registration now creates the user and issues the normal JWT cookie immediately, without email. All registration-code and password-recovery endpoints are disabled with HTTP 503. Forgot Password displays a temporary-unavailability message. Existing login, logout, settings password changes and protected modules remain unchanged. Both frontend and backend need the approved rollback deployment; no SMTP variable changes are required. The Phase 3 implementation details below are retained for later re-enablement, not the active registration flow.
+
+Defense-day validation: full check passed **74 backend + 50 frontend tests (124 total)** and the production build. A subsequently added focused signup-page-to-dashboard regression also passed, giving **125 passing checks, zero failures** across the validated cases. No application changes were made after the full check. The opt-in Atlas integration script was updated and syntax-checked, not run. Existing SMTP diagnostic work was preserved; it is not needed by direct registration. No environment, schema, cookie-policy, database-connection, deployment-configuration or task-module files changed.
+
+Exact rollback files:
+- `backend/controllers/authController.js` — restores validated direct creation through the normal bcrypt hook and existing JWT cookie.
+- `backend/routes/authRoutes.js` — removes mandatory OTP routing and fails closed on all six code/recovery endpoints, including old grants. Existing credential limits in server.js remain.
+- `frontend/src/context/AuthContext.jsx` — restores authenticated user state after registration and cancels stale verification.
+- `frontend/src/pages/auth/RegisterPage.jsx` — redirects directly to the dashboard.
+- `frontend/src/pages/auth/ForgotPasswordPage.jsx` — uses the existing branded auth layout for the unavailability message, with no recovery form or requests.
+- `frontend/src/App.jsx` — redirects stale registration-verification URLs to registration.
+- `backend/tests/registration-rollback.test.js` (new) — real model hashing with mocked persistence, cookie/JWT verification, login/logout, duplicates, validation and disabled reset grants.
+- `backend/tests/otp-regression.test.js` — updates the active registration expectation while retaining dormant OTP/security/SMTP regression coverage.
+- `frontend/tests/functional.test.js` — direct registration, persistence, actual dashboard redirect and disabled-recovery checks.
+- `backend/scripts/integration-check.js` — aligns the isolated script with direct registration; production isolation is retained.
+- `frontend/tests/ui-fixture-server.mjs` — aligns the local-only mock responses with the rollback.
+- `PHASE3_AUTH.md` — records the temporary state and validation.
+
+**Deployment after approval:** deploy the matching backend and frontend rollback versions together. An OTP-era frontend expects a challenge, while this backend again returns `{ user }` and HTTP 201, so a version mismatch can disrupt signup. SMTP configuration is irrelevant to direct registration; do not change or delete secrets. Existing accounts/sessions remain compatible. Production registration is not verified until these versions are deployed. No commit, push, merge or deployment was performed for the rollback.
+
 Implemented locally on `main`. No Phase 3 commit, push, merge or deployment was performed. No production MongoDB records, credentials or environment files were touched. No real email was sent. Existing password-only login, JWT cookies, session persistence, API rewrites, task modules and Phase 2 UI remain in place.
 
 ## Registration
@@ -88,3 +108,39 @@ Changed only six files: `backend/utils/otpEmail.js`, `backend/package.json`, `pn
 The Resend-specific delivery test was replaced with four mocked SMTP tests covering missing/malformed configuration, successful registration/recovery messages, secure transport options, safe diagnostics for authentication/timeouts/network/DNS failures and recipient rejection. Tests never open real SMTP connections or send real email.
 
 Migration validation: **67 backend tests passed, zero failures**; adapter/server syntax checks and production frontend build passed. Frozen offline pnpm installation confirmed the manifest/lockfile match. The generated frontend bundle has no SMTP variable names, Nodemailer or SMTP host markers. Only the six intended files are modified, and nothing is staged. Real Gmail/Vercel delivery was not attempted; no secrets, accounts or records were changed and no commit, push or deployment occurred.
+
+## Registration 503 investigation
+
+Confirmed deployment mismatch from the Vercel API: the main backend domain `taskflow-backend-liart-zeta.vercel.app` resolves to production deployment `dpl_6nGs81XSyzaEETJYJ4bQge1YA2s7`, built from `84ff415f9c090d3ceff74d8d568af7d45f079e41` (`Implement email OTP verification and password recovery`). That commit still contains the Resend adapter. Both local main and GitHub main contain `f9700f09b0fe547791ed5deb0cc6454cdec1e0d2` (`Switch OTP email delivery to Gmail SMTP`). The deployment source is `redeploy`: redeploying an old snapshot does not add code from a later Git commit. SMTP variables have no effect on the Resend implementation in the served snapshot.
+
+This mismatch is confirmed; the exact exception responsible for the observed 503 is not. Vercel runtime logs returned HTTP 403 and no authenticated CLI fallback was available. No real registration request or email was generated to diagnose production. A 3.3-second request does not identify credentials, a network restriction or an SMTP timeout.
+
+### Current registration path and 503 sources
+
+1. `server.js` applies the origin policy and database readiness before the authentication route. An unavailable connection produces a direct 503 with the MongoDB-specific response and Retry-After; it is not the observed generic response. The configured MongoDB connection/selection deadline is 3.5 seconds, which by itself is not proof of a database fault.
+2. Existing credential and OTP-request limits use MongoDB counters in production. Counter/index/store failure throws ApiError(503); exceeding a limit produces 429 instead.
+3. Registration validation produces 400; existing duplicate accounts produce 409. `otpService.issue` checks email configuration before user lookup or password hashing. Missing or malformed email configuration throws 503. For the served old artifact, these are Resend settings; for the Gmail artifact, they are SMTP settings.
+4. The new pending registration holds a bcrypt hash; `codeDigest` throws 503 if the existing JWT secret is unavailable or too short. Pending collection/index/query failures normally propagate as 500, not explicit 503. Cooldown/request-count rejection produces 429.
+5. Delivery failures become 503 for registration: SMTP authentication, DNS, TLS/socket/connection, timeout, recipient rejection, or unexpected transport setup errors. Failed delivery invalidates the challenge. Recovery retains its existing conditional acknowledgement to prevent enumeration.
+6. Production `errorMiddleware` intentionally converts every 5xx error to the generic public message and logs only status. SMTP send failures already had a private category log, but **configuration validation ran before the SMTP catch and had no diagnostic**. That confirmed observability defect is now fixed. No public error payload or frontend change is needed.
+
+### Targeted local changes
+
+- `backend/utils/otpEmail.js`: invalid configuration now logs only presence/format booleans. SMTP errors additionally log allowlisted stage/timeout type, operation phase and elapsed milliseconds. Raw errors, server replies, addresses, credentials, passwords and codes are never logged. Certificate validation, OTP security and all timeouts remain unchanged.
+- `backend/tests/otp-regression.test.js`: configuration checks now assert the diagnostic flags; three added checks reproduce pre-issuance configuration failure with the generic production response, distinguish timeout types, and prevent provider-controlled fields from entering logs. Existing recipient tests account for the extra safe fields.
+- This report documents the trace and production steps. No other application files, environment values, schemas or routes changed.
+
+Nodemailer 10.1.0's connectionTimeout is the whole setup deadline (including DNS/TCP/TLS/greeting), not separate five-second budgets; this was verified in the installed transport implementation. It is conservative relative to the library defaults. Keep it unchanged until actual Gmail logs demonstrate a setup timeout near the limit. Do not extend it based on this old Resend deployment or disable TLS checks. See [Nodemailer SMTP settings](https://nodemailer.com/smtp).
+
+### Safe production procedure, after approval
+
+1. In the backend Vercel project's Deployments list, choose the deployment for **GitHub main commit f9700f0 or a later approved commit that includes the Gmail adapter**. Verify the source SHA, backend root directory and Nodemailer dependency. Do not click Redeploy on 84ff415 again. Confirm the deployment assigned to the main backend domain actually uses the intended SHA. No deployment was performed during this investigation.
+2. In that backend project's Production environment, verify the two SMTP variable names and format locally in Vercel. Check an email address plus a Google-generated App Password, rather than a normal Google password. Do not copy values into logs, screenshots or this report. The adapter removes copied grouping whitespace. No environment change is yet proven necessary.
+3. After the approved diagnostics are deployed, use an isolated preview/test database (`taskflow_test`) and a disposable account/inbox you control. Find the single request in Vercel Runtime Logs and inspect all function console entries for that request, rather than only the final generic status line. Do not enable Nodemailer debug/logger output.
+4. `configuration`: use the presence/format booleans to locate the missing/malformed variable or wrong environment scope. This means SMTP was never attempted; it is not evidence Gmail rejected credentials.
+5. `authentication` plus SMTP 535: inspect Google App Password availability, 2-Step Verification and sender security alerts. This is authentication rejection; a saved variable alone does not prove it is valid. A sender/recipient/message category with a numeric 4xx/5xx status indicates SMTP/provider refusal, not automatically a credential fault.
+6. `dns`, `connection`, TLS stage, or `timeout` with CONNECT/GREETING/UPGRADE/SOCKET type: inspect runtime/network/Google security behavior. Vercel permits SMTP except port 25; this adapter uses TLS port 465. Do not infer that Vercel blocks Gmail from an unclassified 503. See [Vercel SMTP support](https://vercel.com/kb/guide/serverless-functions-and-smtp).
+7. `smtp` with `transport_setup`: investigate the installed runtime/dependency rather than changing credentials. If the final generic 503 has no SMTP/configuration diagnostic, check the deployed artifact, shared rate-limit store and JWT configuration first. Correlate request/deployment IDs; avoid dumping environment variables or documents.
+8. Share only the category, phase, allowlisted stage/timeout type, numeric SMTP status and elapsed milliseconds if further diagnosis is needed. Do not share recipient/sender addresses, full provider replies, OTPs or secrets. Production Gmail delivery is not verified by the local mocked checks.
+
+Investigation validation: **70 backend tests passed, zero failures on the final run**, including three new diagnostic regressions; production frontend build and adapter syntax check passed. The initial run had one unrelated existing localhost test fail with Node fetch `bad port` after random ephemeral-port allocation; it passed on rerun without a code change. Only the adapter, its test file and this documentation are modified. Nothing is staged, committed, pushed or deployed, and no real email or database writes were performed.

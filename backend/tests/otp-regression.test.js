@@ -14,6 +14,7 @@ import { verifyRegistration, forgotPassword, resetPassword } from '../controller
 import { protect } from '../middleware/authMiddleware.js';
 import { passwordResetSchema, registerSchema } from '../utils/validation.js';
 import { createOtpRateLimits } from '../middleware/authRateLimits.js';
+import { errorMiddleware } from '../middleware/errorMiddleware.js';
 
 const registration = { firstName: 'Isolated', lastName: 'Fixture', username: 'otp_fixture', email: 'otp@example.invalid', password: 'IsolatedFixture123!', confirmPassword: 'IsolatedFixture123!' };
 const clone = (value) => structuredClone(value);
@@ -199,7 +200,7 @@ test('OTP validation reuses bcrypt byte limits, confirmation and registration va
   assert.equal(registerSchema.safeParse({ ...registration, username: 'invalid!' }).success, false);
 });
 
-test('registration controller sets no cookie until verification; recovery reset never logs in', async (t) => {
+test('retained OTP controllers remain testable while public recovery routes are disabled', async (t) => {
   fixture(t); let cookies = 0; let result; let status;
   const user = { _id: 'fixture', id: 'fixture', firstName: 'Fixture', lastName: 'Account', role: 'User', toJSON: () => ({ role: 'User' }) };
   t.mock.method(otpService, 'issue', async () => ({ challengeId: 'a'.repeat(64) }));
@@ -207,7 +208,6 @@ test('registration controller sets no cookie until verification; recovery reset 
   t.mock.method(otpService, 'resetPassword', async () => {});
   t.mock.method(ActivityLog, 'create', async () => ({}));
   const res = { cookie: () => { cookies++; }, status(value) { status = value; return this; }, json(value) { result = value; } };
-  await register({ body: registration }, res); assert.equal(cookies, 0); assert.equal(status, 202); assert.equal(result.data.user, undefined);
   await verifyRegistration({ body: { challengeId: 'a'.repeat(64), code: '123456' } }, res); assert.equal(cookies, 1); assert.equal(status, 201);
   await resetPassword({ body: { challengeId: 'a'.repeat(64), resetToken: 'b'.repeat(64), newPassword: registration.password, confirmPassword: registration.password } }, res); assert.equal(cookies, 1);
   await forgotPassword({ body: { email: registration.email } }, res); assert.match(result.message, /If an eligible account/);
@@ -249,13 +249,18 @@ function smtpFixture(t) {
 }
 
 test('SMTP delivery rejects missing or malformed configuration without opening a connection', async (t) => {
-  smtpFixture(t); let connects = 0;
+  smtpFixture(t); let connects = 0; const logs = [];
+  t.mock.method(console, 'error', (...values) => logs.push(values));
   t.mock.method(nodemailer, 'createTransport', () => { connects++; });
   for (const [user, password] of [['', 'abcdefghijklmnop'], ['sender@example.invalid', ''], ['sender@example.invalid\r\nInjected', 'abcdefghijklmnop'], ['sender@example.invalid', 'not-an-app-password']]) {
     process.env.SMTP_USER = user; process.env.SMTP_APP_PASSWORD = password;
     await assert.rejects(emailDelivery.send({ email: registration.email, code: '123456', purpose: 'registration' }), (error) => error.statusCode === 503);
   }
   assert.equal(connects, 0);
+  assert.equal(logs.length, 4);
+  assert.equal(logs[0][1].userPresent, false); assert.equal(logs[1][1].passwordPresent, false);
+  assert.equal(logs[2][1].userValid, false); assert.equal(logs[3][1].passwordValid, false);
+  assert.ok(logs.every((entry) => entry[1].category === 'configuration'));
 });
 
 test('Gmail SMTP delivers both existing OTP templates with TLS, bounded timeouts and backend-only credentials', async (t) => {
@@ -293,7 +298,52 @@ test('SMTP recipient rejection does not report a successful delivery', async (t)
   t.mock.method(console, 'error', (...values) => logs.push(values));
   t.mock.method(nodemailer, 'createTransport', () => ({ async sendMail() { return { accepted: [], rejected: [registration.email], response: 'SENSITIVE_SERVER_RESPONSE' }; } }));
   await assert.rejects(emailDelivery.send({ email: registration.email, code: '123456', purpose: 'recovery' }), (error) => error.statusCode === 503);
-  assert.deepEqual(logs[0][1], { category: 'recipient' });
+  assert.equal(logs[0][1].category, 'recipient'); assert.equal(logs[0][1].phase, 'smtp_send');
+  assert.ok(Number.isInteger(logs[0][1].elapsedMs));
+});
+
+test('configuration failure before OTP issuance is diagnostic while the production response stays generic', async (t) => {
+  const f = fixture(t); smtpFixture(t); delete process.env.SMTP_APP_PASSWORD;
+  const before = process.env.NODE_ENV; process.env.NODE_ENV = 'production';
+  t.after(() => { if (before === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = before; });
+  const logs = []; t.mock.method(console, 'error', (...values) => logs.push(values));
+  let lookups = 0; t.mock.method(f.accounts, 'duplicate', async () => { lookups++; });
+  const service = createOtpService({ store: f.store, accounts: f.accounts, delivery: emailDelivery });
+  let body; let status;
+  await assert.rejects(service.issue('registration', registration.email, registration), (error) => {
+    errorMiddleware(error, {}, { status(value) { status = value; return this; }, json(value) { body = value; } }, () => {});
+    return error.statusCode === 503;
+  });
+  assert.equal(lookups, 0); assert.equal(f.collection.records.size, 0);
+  assert.equal(status, 503); assert.deepEqual(body, { success: false, message: 'Something went wrong. Please try again in a moment.' });
+  assert.deepEqual(logs[0][1], { category: 'configuration', userPresent: true, userValid: true, passwordPresent: false, passwordValid: false });
+  assert.ok(!JSON.stringify({ logs, body }).includes(process.env.SMTP_USER));
+});
+
+test('SMTP timeout diagnostics distinguish setup, greeting and socket inactivity without widening timeouts', async (t) => {
+  smtpFixture(t); const logs = []; t.mock.method(console, 'error', (...values) => logs.push(values));
+  for (const timeoutType of ['CONNECT_TIMEOUT', 'GREETING_TIMEOUT', 'UPGRADE_TIMEOUT', 'SOCKET_TIMEOUT']) {
+    t.mock.method(nodemailer, 'createTransport', () => ({ async sendMail() {
+      throw Object.assign(new Error('SENSITIVE_SERVER_RESPONSE'), { code: 'ETIMEDOUT', command: 'CONN', timeoutType });
+    } }));
+    await assert.rejects(emailDelivery.send({ email: registration.email, code: '123456', purpose: 'registration' }), (error) => error.statusCode === 503);
+    const diagnostic = logs.at(-1)[1];
+    assert.equal(diagnostic.category, 'timeout'); assert.equal(diagnostic.timeoutType, timeoutType);
+    assert.equal(diagnostic.stage, 'connection'); assert.equal(diagnostic.phase, 'smtp_send');
+    assert.ok(Number.isInteger(diagnostic.elapsedMs) && diagnostic.elapsedMs >= 0);
+  }
+  assert.ok(!JSON.stringify(logs).includes('SENSITIVE_SERVER_RESPONSE'));
+});
+
+test('unexpected transport errors cannot inject raw provider data into diagnostic fields', async (t) => {
+  smtpFixture(t); const logs = []; t.mock.method(console, 'error', (...values) => logs.push(values));
+  t.mock.method(nodemailer, 'createTransport', () => {
+    throw Object.assign(new Error('SENSITIVE_SERVER_RESPONSE'), { code: 'toString', command: 'SENSITIVE_SERVER_RESPONSE', timeoutType: 'SENSITIVE_SERVER_RESPONSE', responseCode: 'SENSITIVE_SERVER_RESPONSE' });
+  });
+  await assert.rejects(emailDelivery.send({ email: registration.email, code: '123456', purpose: 'registration' }), (error) => error.statusCode === 503);
+  assert.equal(logs[0][1].category, 'smtp'); assert.equal(logs[0][1].phase, 'transport_setup');
+  assert.ok(!JSON.stringify(logs).includes('SENSITIVE_SERVER_RESPONSE'));
+  assert.equal(logs[0][1].stage, undefined); assert.equal(logs[0][1].timeoutType, undefined);
 });
 
 test('OTP request and verification limits are separate and use existing shared production stores', async (t) => {

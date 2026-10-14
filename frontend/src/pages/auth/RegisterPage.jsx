@@ -31,7 +31,7 @@ export default function RegisterPage() {
     setFieldErrors(invalid);
     if (Object.keys(invalid).length) { setError(Object.values(invalid)[0]); document.getElementById(Object.keys(invalid)[0])?.focus(); return; }
     setLoading(true);
-    try { const challenge = await register(form); navigate('/register/verify', { state: { challenge }, replace: true }); }
+    try { await register(form); navigate('/dashboard', { replace: true }); }
     catch (requestError) { setError(getMessage(requestError, 'Unable to create your account.')); }
     finally { setLoading(false); }
   };

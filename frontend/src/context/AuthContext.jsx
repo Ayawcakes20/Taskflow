@@ -60,7 +60,11 @@ export function AuthProvider({ children }) {
 
   const register = useCallback(async (values) => {
     const { data } = await api.post('/auth/register', values);
-    return data.data;
+    verification.current?.abort();
+    setUser(data.data.user);
+    setSessionError(false);
+    setLoading(false);
+    return data.data.user;
   }, []);
 
   const verifyRegistration = useCallback(async (values) => {

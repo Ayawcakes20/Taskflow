@@ -98,16 +98,14 @@ try {
 
   let cookie;
   let outsiderCookie;
-  await check('registration issues no session until mocked email verification sets secure JWT cookies', async () => {
+  await check('direct registration sets secure JWT cookies without email delivery', async () => {
     for (const [index, username] of userNames.entries()) {
       const result = await request('/auth/register', { method: 'POST', body: {
         firstName: 'Deployment', lastName: 'Fixture', username, email: `${username}@example.invalid`, password: 'FixturePassword123!', confirmPassword: 'FixturePassword123!',
       } });
-      assert.equal(result.status, 202);
-      assert.equal(result.headers.get('set-cookie'), null);
-      const verified = await request('/auth/register/verify', { method: 'POST', body: { challengeId: result.data.data.challengeId, code: emailCodes.get(`${username}@example.invalid`) } });
-      assert.equal(verified.status, 201);
-      const header = verified.headers.get('set-cookie');
+      assert.equal(result.status, 201);
+      assert.equal(emailCodes.size, 0);
+      const header = result.headers.get('set-cookie');
       assert.match(header, /HttpOnly/i);
       assert.match(header, /Secure/i);
       assert.match(header, /SameSite=Lax/i);
