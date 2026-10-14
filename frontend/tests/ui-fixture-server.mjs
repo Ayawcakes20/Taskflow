@@ -51,7 +51,10 @@ app.use('/api', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const success = (data = {}) => res.json({ success: true, data });
   if (req.path === '/auth/me') return authenticated ? success({ user }) : res.status(401).json({ success: false, message: 'Please sign in to continue.' });
-  if (['/auth/register/verify', '/auth/register/resend', '/auth/forgot-password', '/auth/forgot-password/resend', '/auth/forgot-password/verify', '/auth/reset-password'].includes(req.path)) return res.status(503).json({ success: false, message: 'Email-code verification and password recovery are temporarily unavailable.' });
+  if (['/auth/register/verify', '/auth/register/resend'].includes(req.path)) return res.status(503).json({ success: false, message: 'Registration email-code verification is currently disabled.' });
+  if (req.path === '/auth/forgot-password' || req.path === '/auth/forgot-password/resend') return success(verificationFixture());
+  if (req.path === '/auth/forgot-password/verify') return success({ resetToken: randomBytes(32).toString('hex'), expiresAt: new Date(Date.now() + 300000).toISOString() });
+  if (req.path === '/auth/reset-password') return success();
   if (req.path === '/auth/login' || req.path === '/auth/register') { authenticated = true; return success({ user }); }
   if (req.path === '/auth/logout') { authenticated = false; return success(); }
   if (!authenticated) return res.status(401).json({ success: false, message: 'Please sign in to continue.' });

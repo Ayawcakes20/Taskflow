@@ -533,13 +533,36 @@ test('expired verification disables submission but allows requesting a new code'
   assert.equal([...container.querySelectorAll('button')].find((button) => button.textContent === 'Resend code').disabled, false);
 });
 
-test('forgot password displays temporary unavailability without recovery forms or API requests', async () => {
-  let requests = 0;
-  requestHandler = async () => { requests++; throw new Error('Recovery must stay disabled'); };
+test('forgot password progresses through verification and confirmation without logging in or persisting grants', async () => {
+  authenticated = false;
+  const paths = [];
+  const challenge = { challengeId: 'a'.repeat(64), emailHint: 'f***@example.invalid', expiresAt: new Date(Date.now() + 300000).toISOString(), resendAt: new Date(Date.now() + 60000).toISOString() };
+  requestHandler = async (config) => {
+    paths.push(config.url);
+    if (config.url === '/auth/forgot-password') return challenge;
+    if (config.url === '/auth/forgot-password/verify') return { resetToken: 'b'.repeat(64), expiresAt: new Date(Date.now() + 300000).toISOString() };
+    return {};
+  };
   await mount('/forgot-password', '/src/pages/auth/ForgotPasswordPage.jsx');
-  assert.match(container.textContent, /temporarily unavailable/);
-  assert.equal(container.querySelector('form'), null); assert.equal(container.querySelector('input'), null);
-  assert.ok(container.querySelector('a[href="/login"]')); assert.equal(requests, 0);
+  await fill(container.querySelector('#recovery-email'), 'fixture@example.invalid'); await click(container.querySelector('button[type="submit"]'));
+  assert.match(container.textContent, /eligible account/); assert.equal(container.querySelector('#recovery-email'), null);
+  await fill(container.querySelector('#verification-code'), '123456'); await click(container.querySelector('button[type="submit"]'));
+  assert.equal(sessionStorage.getItem('taskflow:recovery-challenge'), null);
+  await fill(container.querySelector('#reset-newPassword'), 'FixturePassword123!'); await fill(container.querySelector('#reset-confirmPassword'), 'DifferentPassword123!');
+  await click(container.querySelector('button[type="submit"]'));
+  assert.match(container.querySelector('[role="alert"]').textContent, /do not match/); assert.equal(paths.includes('/auth/reset-password'), false);
+  await fill(container.querySelector('#reset-confirmPassword'), 'FixturePassword123!'); await click(container.querySelector('button[type="submit"]'));
+  assert.ok(container.querySelector('a[href="/login"]')); assert.match(container.textContent, /Previous sessions/);
+  assert.deepEqual(paths, ['/auth/forgot-password', '/auth/forgot-password/verify', '/auth/reset-password']);
+  assert.equal(window.location.pathname, '/login');
+});
+
+test('forgot password retries delivery errors without displaying a false success', async () => {
+  requestHandler = async () => { throw Object.assign(new Error('Unavailable'), { response: { status: 503, data: { message: 'Email delivery unavailable.' } } }); };
+  await mount('/forgot-password', '/src/pages/auth/ForgotPasswordPage.jsx');
+  await fill(container.querySelector('#recovery-email'), 'fixture@example.invalid'); await click(container.querySelector('button[type="submit"]'));
+  assert.match(container.querySelector('[role="alert"]').textContent, /unavailable/); assert.ok(container.querySelector('#recovery-email'));
+  assert.equal(container.querySelector('#verification-code'), null);
 });
 
 test('old registration verification URLs return guests to direct registration', async () => {
